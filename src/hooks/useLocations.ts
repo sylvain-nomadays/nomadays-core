@@ -5,6 +5,7 @@ import { apiClient } from '@/lib/api/client';
 import { useApi, useMutation } from './useApi';
 import type {
   Location,
+  LocationType,
   CreateLocationDTO,
   UpdateLocationDTO,
   PaginatedResponse,
@@ -17,7 +18,9 @@ import type {
 // ============================================================================
 
 interface LocationFilters {
+  location_type?: LocationType;
   country_code?: string;
+  parent_id?: number;
   search?: string;
   is_active?: boolean;
   page?: number;
@@ -31,7 +34,9 @@ export function useLocations(filters: LocationFilters = {}) {
   const fetcher = useCallback(async () => {
     const params = new URLSearchParams();
 
+    if (filters.location_type) params.append('location_type', filters.location_type);
     if (filters.country_code) params.append('country_code', filters.country_code);
+    if (filters.parent_id !== undefined) params.append('parent_id', String(filters.parent_id));
     if (filters.search) params.append('search', filters.search);
     if (filters.is_active !== undefined) params.append('is_active', String(filters.is_active));
     if (filters.page) params.append('page', String(filters.page));
@@ -39,7 +44,7 @@ export function useLocations(filters: LocationFilters = {}) {
 
     const query = params.toString();
     return apiClient.get<PaginatedResponse<Location>>(`/locations${query ? `?${query}` : ''}`);
-  }, [filters.country_code, filters.search, filters.is_active, filters.page, filters.page_size]);
+  }, [filters.location_type, filters.country_code, filters.parent_id, filters.search, filters.is_active, filters.page, filters.page_size]);
 
   const result = useApi(fetcher);
 
@@ -50,6 +55,21 @@ export function useLocations(filters: LocationFilters = {}) {
     error: result.error,
     refetch: result.refetch,
   };
+}
+
+/**
+ * Hook pour lister les locations par pays
+ */
+export function useLocationsByCountry(countryCode: string | undefined, locationType?: LocationType) {
+  const fetcher = useCallback(async () => {
+    if (!countryCode) return [];
+    const params = new URLSearchParams();
+    if (locationType) params.append('location_type', locationType);
+    const query = params.toString();
+    return apiClient.get<Location[]>(`/locations/by-country/${countryCode}${query ? `?${query}` : ''}`);
+  }, [countryCode, locationType]);
+
+  return useApi(fetcher, { immediate: !!countryCode });
 }
 
 /**

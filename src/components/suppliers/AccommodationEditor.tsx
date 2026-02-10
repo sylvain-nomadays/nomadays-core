@@ -14,7 +14,12 @@ import {
   Trash2,
   GripVertical,
   Check,
+  Medal,
+  FileText,
 } from 'lucide-react';
+import GooglePlacesAutocomplete, { PlaceResult } from '@/components/common/GooglePlacesAutocomplete';
+import { LocationSelector } from './LocationSelector';
+import UrlImportButton from './UrlImportButton';
 import type {
   Accommodation,
   CreateAccommodationDTO,
@@ -68,18 +73,60 @@ interface AccommodationEditorProps {
   loading?: boolean;
 }
 
+// Type pour les données importées depuis URL
+interface ImportedAccommodationData {
+  name?: string;
+  description?: string;
+  star_rating?: number;
+  address?: string;
+  city?: string;
+  country_code?: string;
+  check_in_time?: string;
+  check_out_time?: string;
+  amenities?: string[];
+  reservation_email?: string;
+  reservation_phone?: string;
+  website_url?: string;
+  room_categories?: Array<{
+    name: string;
+    description?: string;
+    max_occupancy?: number;
+  }>;
+  photo_urls?: string[];
+  source_url: string;
+}
+
+// Options pour la priorité interne
+const PRIORITY_OPTIONS = [
+  { value: 1, label: 'Prioritaire', description: 'Fournisseur principal', color: 'bg-emerald-100 text-emerald-700 ring-emerald-300' },
+  { value: 2, label: 'Secondaire', description: 'Alternative de qualité', color: 'bg-blue-100 text-blue-700 ring-blue-300' },
+  { value: 3, label: 'Backup', description: 'En cas de non-disponibilité', color: 'bg-amber-100 text-amber-700 ring-amber-300' },
+  { value: 4, label: 'Occasionnel', description: 'Usage ponctuel', color: 'bg-gray-100 text-gray-700 ring-gray-300' },
+];
+
 type FormData = {
   name: string;
   description: string;
   star_rating: number | null;
+  internal_priority: number | null;
+  internal_notes: string;
   check_in_time: string;
   check_out_time: string;
+  // Location (destination interne pour filtrage)
+  location_id: number | null;
+  // Adresse Google Maps (géolocalisation précise)
   address: string;
+  city: string;
+  country_code: string;
   lat: number | null;
   lng: number | null;
+  google_place_id: string;
   amenities: string[];
   reservation_email: string;
   reservation_phone: string;
+  // Entité de facturation (pour la logistique)
+  billing_entity_name: string;
+  billing_entity_note: string;
   external_provider: string;
   external_id: string;
   status: AccommodationStatus;
@@ -102,14 +149,25 @@ export default function AccommodationEditor({
     name: '',
     description: '',
     star_rating: null,
+    internal_priority: null,
+    internal_notes: '',
     check_in_time: '14:00',
     check_out_time: '11:00',
+    // Location
+    location_id: null,
+    // Adresse
     address: '',
+    city: '',
+    country_code: '',
     lat: null,
     lng: null,
+    google_place_id: '',
     amenities: [],
     reservation_email: '',
     reservation_phone: '',
+    // Entité de facturation
+    billing_entity_name: '',
+    billing_entity_note: '',
     external_provider: 'manual',
     external_id: '',
     status: 'active',
@@ -124,20 +182,79 @@ export default function AccommodationEditor({
         name: accommodation.name || '',
         description: accommodation.description || '',
         star_rating: accommodation.star_rating || null,
+        internal_priority: accommodation.internal_priority || null,
+        internal_notes: accommodation.internal_notes || '',
         check_in_time: accommodation.check_in_time || '14:00',
         check_out_time: accommodation.check_out_time || '11:00',
+        // Location
+        location_id: accommodation.location_id || null,
+        // Adresse
         address: accommodation.address || '',
+        city: accommodation.city || '',
+        country_code: accommodation.country_code || '',
         lat: accommodation.lat || null,
         lng: accommodation.lng || null,
+        google_place_id: accommodation.google_place_id || '',
         amenities: accommodation.amenities || [],
         reservation_email: accommodation.reservation_email || '',
         reservation_phone: accommodation.reservation_phone || '',
+        // Entité de facturation
+        billing_entity_name: accommodation.billing_entity_name || '',
+        billing_entity_note: accommodation.billing_entity_note || '',
         external_provider: accommodation.external_provider || 'manual',
         external_id: accommodation.external_id || '',
         status: accommodation.status || 'active',
       });
     }
   }, [accommodation]);
+
+  // Handle URL import data
+  const handleUrlImport = (importedData: ImportedAccommodationData) => {
+    setFormData((prev) => ({
+      ...prev,
+      // Only update fields that are empty or if the imported data exists
+      name: prev.name || importedData.name || '',
+      description: prev.description || importedData.description || '',
+      star_rating: importedData.star_rating || prev.star_rating,
+      check_in_time: importedData.check_in_time || prev.check_in_time,
+      check_out_time: importedData.check_out_time || prev.check_out_time,
+      address: importedData.address || prev.address,
+      city: importedData.city || prev.city,
+      country_code: importedData.country_code || prev.country_code,
+      amenities: importedData.amenities && importedData.amenities.length > 0
+        ? importedData.amenities
+        : prev.amenities,
+      reservation_email: importedData.reservation_email || prev.reservation_email,
+      reservation_phone: importedData.reservation_phone || prev.reservation_phone,
+    }));
+  };
+
+  // Handle Google Places selection
+  const handlePlaceSelect = (place: PlaceResult | null) => {
+    if (place) {
+      setFormData((prev) => ({
+        ...prev,
+        name: prev.name || place.name, // Only set name if empty
+        address: place.formatted_address,
+        city: place.city || '',
+        country_code: place.country_code || '',
+        lat: place.geometry?.location.lat || null,
+        lng: place.geometry?.location.lng || null,
+        google_place_id: place.place_id,
+      }));
+    } else {
+      // Clear location data
+      setFormData((prev) => ({
+        ...prev,
+        address: '',
+        city: '',
+        country_code: '',
+        lat: null,
+        lng: null,
+        google_place_id: '',
+      }));
+    }
+  };
 
   const handleChange = (field: keyof FormData, value: FormData[keyof FormData]) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -185,14 +302,25 @@ export default function AccommodationEditor({
           name: formData.name,
           description: formData.description || undefined,
           star_rating: formData.star_rating || undefined,
+          internal_priority: formData.internal_priority || undefined,
+          internal_notes: formData.internal_notes || undefined,
           check_in_time: formData.check_in_time || undefined,
           check_out_time: formData.check_out_time || undefined,
+          // Location (destination interne)
+          location_id: formData.location_id || undefined,
+          // Adresse Google Maps
           address: formData.address || undefined,
+          city: formData.city || undefined,
+          country_code: formData.country_code || undefined,
           lat: formData.lat || undefined,
           lng: formData.lng || undefined,
+          google_place_id: formData.google_place_id || undefined,
           amenities: formData.amenities.length > 0 ? formData.amenities : undefined,
           reservation_email: formData.reservation_email || undefined,
           reservation_phone: formData.reservation_phone || undefined,
+          // Entité de facturation
+          billing_entity_name: formData.billing_entity_name || undefined,
+          billing_entity_note: formData.billing_entity_note || undefined,
           external_provider: formData.external_provider,
           external_id: formData.external_id || undefined,
           status: formData.status,
@@ -202,17 +330,27 @@ export default function AccommodationEditor({
           name: formData.name,
           description: formData.description || undefined,
           star_rating: formData.star_rating || undefined,
+          internal_priority: formData.internal_priority || undefined,
+          internal_notes: formData.internal_notes || undefined,
           check_in_time: formData.check_in_time || undefined,
           check_out_time: formData.check_out_time || undefined,
+          // Location (destination interne)
+          location_id: formData.location_id || undefined,
+          // Adresse Google Maps
           address: formData.address || undefined,
+          city: formData.city || undefined,
+          country_code: formData.country_code || undefined,
           lat: formData.lat || undefined,
           lng: formData.lng || undefined,
+          google_place_id: formData.google_place_id || undefined,
           amenities: formData.amenities.length > 0 ? formData.amenities : undefined,
           reservation_email: formData.reservation_email || undefined,
           reservation_phone: formData.reservation_phone || undefined,
+          // Entité de facturation
+          billing_entity_name: formData.billing_entity_name || undefined,
+          billing_entity_note: formData.billing_entity_note || undefined,
           external_provider: formData.external_provider,
           external_id: formData.external_id || undefined,
-          status: formData.status,
         } as CreateAccommodationDTO);
 
     await onSave(submitData);
@@ -225,14 +363,18 @@ export default function AccommodationEditor({
         <h3 className="text-lg font-semibold text-gray-900">
           {isEditing ? "Modifier l'hébergement" : 'Nouvel hébergement'}
         </h3>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* URL Import Button - Only show for new accommodations */}
+          {!isEditing && (
+            <UrlImportButton onImport={handleUrlImport} disabled={loading} />
+          )}
           <button
             type="button"
             onClick={onCancel}
-            className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg"
+            className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg"
             disabled={loading}
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
         </div>
       </div>
@@ -258,35 +400,112 @@ export default function AccommodationEditor({
             {errors.name && <p className="mt-1 text-sm text-red-600">{errors.name}</p>}
           </div>
 
-          {/* Star Rating */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Classification</label>
-            <div className="flex items-center gap-1">
-              {[1, 2, 3, 4, 5].map((rating) => (
-                <button
-                  key={rating}
-                  type="button"
-                  onClick={() => handleChange('star_rating', formData.star_rating === rating ? null : rating)}
-                  className="p-1 hover:scale-110 transition-transform"
-                >
-                  <Star
-                    className={`w-6 h-6 ${
-                      formData.star_rating && rating <= formData.star_rating
-                        ? 'text-amber-400 fill-amber-400'
-                        : 'text-gray-300'
+          {/* Location (destination interne pour filtrage) */}
+          <div className="p-4 bg-blue-50 rounded-lg space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                <MapPin className="w-4 h-4 inline mr-1 text-blue-600" />
+                Destination (pour filtrage)
+              </label>
+              <p className="text-xs text-gray-500 mb-2">
+                Associez cet hébergement à une destination (Chiang Mai, Bangkok, etc.)
+              </p>
+              <LocationSelector
+                value={formData.location_id}
+                onChange={(locationId) => handleChange('location_id', locationId)}
+                countryCode={formData.country_code || undefined}
+                placeholder="Sélectionner une destination..."
+                allowCreate
+                disabled={loading}
+              />
+            </div>
+          </div>
+
+          {/* Classifications Section */}
+          <div className="p-4 bg-gray-50 rounded-lg space-y-4">
+            <h4 className="font-medium text-gray-900">Classifications</h4>
+
+            {/* Star Rating (Official) */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                <Star className="w-4 h-4 inline mr-1 text-amber-500" />
+                Classification officielle (étoiles)
+              </label>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((rating) => (
+                  <button
+                    key={rating}
+                    type="button"
+                    onClick={() => handleChange('star_rating', formData.star_rating === rating ? null : rating)}
+                    className="p-1 hover:scale-110 transition-transform"
+                  >
+                    <Star
+                      className={`w-6 h-6 ${
+                        formData.star_rating && rating <= formData.star_rating
+                          ? 'text-amber-400 fill-amber-400'
+                          : 'text-gray-300'
+                      }`}
+                    />
+                  </button>
+                ))}
+                {formData.star_rating && (
+                  <button
+                    type="button"
+                    onClick={() => handleChange('star_rating', null)}
+                    className="ml-2 text-sm text-gray-500 hover:text-gray-700"
+                  >
+                    Effacer
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Internal Priority */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                <Medal className="w-4 h-4 inline mr-1 text-emerald-600" />
+                Priorité interne
+              </label>
+              <p className="text-xs text-gray-500 mb-2">
+                Pour aider les vendeurs à choisir le bon prestataire
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {PRIORITY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => handleChange(
+                      'internal_priority',
+                      formData.internal_priority === option.value ? null : option.value
+                    )}
+                    className={`px-3 py-2 rounded-lg text-left text-sm transition-all ${
+                      formData.internal_priority === option.value
+                        ? `${option.color} ring-2 ring-offset-1`
+                        : 'bg-white text-gray-600 border border-gray-200 hover:border-gray-300'
                     }`}
-                  />
-                </button>
-              ))}
-              {formData.star_rating && (
-                <button
-                  type="button"
-                  onClick={() => handleChange('star_rating', null)}
-                  className="ml-2 text-sm text-gray-500 hover:text-gray-700"
-                >
-                  Effacer
-                </button>
-              )}
+                  >
+                    <span className="font-medium">{option.label}</span>
+                    <span className="block text-xs opacity-75">{option.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Notes internes */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                📝 Notes internes (vendeurs)
+              </label>
+              <textarea
+                value={formData.internal_notes}
+                onChange={(e) => handleChange('internal_notes', e.target.value)}
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
+                placeholder="Ex: Pas de chambre twin disponible, lit supplémentaire = matelas au sol, Hollywood beds..."
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Ces notes sont visibles uniquement par les vendeurs
+              </p>
             </div>
           </div>
 
@@ -318,20 +537,52 @@ export default function AccommodationEditor({
             </div>
           </div>
 
-          {/* Address */}
+          {/* Address with Google Places */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Adresse</label>
-            <div className="relative">
-              <MapPin className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
-              <textarea
-                value={formData.address}
-                onChange={(e) => handleChange('address', e.target.value)}
-                rows={2}
-                className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                placeholder="Adresse complète"
-              />
-            </div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Rechercher l'hébergement (adresse précise)
+            </label>
+            <GooglePlacesAutocomplete
+              value={formData.address}
+              placeholder="Tapez le nom de l'hôtel ou l'adresse..."
+              onPlaceSelect={handlePlaceSelect}
+              types={['lodging']}
+              disabled={loading}
+            />
+            {formData.google_place_id && (
+              <p className="mt-1 text-xs text-emerald-600 flex items-center gap-1">
+                <Check className="w-3 h-3" />
+                Adresse validée via Google Maps
+              </p>
+            )}
           </div>
+
+          {/* City & Country (Read-only if from Google) */}
+          {(formData.city || formData.country_code) && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Ville</label>
+                <input
+                  type="text"
+                  value={formData.city}
+                  onChange={(e) => handleChange('city', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-gray-50"
+                  placeholder="Ville"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Pays</label>
+                <input
+                  type="text"
+                  value={formData.country_code}
+                  onChange={(e) => handleChange('country_code', e.target.value.toUpperCase().slice(0, 2))}
+                  maxLength={2}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-gray-50 uppercase"
+                  placeholder="FR"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Description */}
           <div>
@@ -348,7 +599,7 @@ export default function AccommodationEditor({
 
         {/* Right Column */}
         <div className="space-y-4">
-          {/* Contact Reservation */}
+          {/* Contact Reservation & Facturation */}
           <div className="p-4 bg-gray-50 rounded-lg space-y-4">
             <h4 className="font-medium text-gray-900">Contact réservation</h4>
 

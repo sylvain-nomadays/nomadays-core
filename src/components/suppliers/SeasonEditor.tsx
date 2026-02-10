@@ -18,7 +18,9 @@ import type {
   CreateAccommodationSeasonDTO,
   UpdateAccommodationSeasonDTO,
   SeasonType,
+  SeasonLevel,
 } from '@/lib/api/types';
+import { SEASON_LEVEL_LABELS } from '@/lib/api/types';
 
 // ============================================================================
 // Constants
@@ -56,11 +58,17 @@ const DAYS_OF_WEEK = [
 ];
 
 const SEASON_PRESETS = [
-  { name: 'Haute Saison', code: 'HS', icon: Sun, color: 'text-amber-500' },
-  { name: 'Basse Saison', code: 'BS', icon: Leaf, color: 'text-emerald-500' },
-  { name: 'Moyenne Saison', code: 'MS', icon: Cloud, color: 'text-blue-500' },
-  { name: 'Noël / Nouvel An', code: 'XMAS', icon: Snowflake, color: 'text-sky-500' },
-  { name: 'Week-end', code: 'WE', icon: Calendar, color: 'text-purple-500' },
+  { name: 'Haute Saison', code: 'HS', icon: Sun, color: 'text-amber-500', level: 'high' as SeasonLevel },
+  { name: 'Basse Saison', code: 'BS', icon: Leaf, color: 'text-emerald-500', level: 'low' as SeasonLevel },
+  { name: 'Moyenne Saison', code: 'MS', icon: Cloud, color: 'text-blue-500', level: 'high' as SeasonLevel },
+  { name: 'Noël / Nouvel An', code: 'XMAS', icon: Snowflake, color: 'text-sky-500', level: 'peak' as SeasonLevel },
+  { name: 'Week-end', code: 'WE', icon: Calendar, color: 'text-purple-500', level: 'high' as SeasonLevel },
+];
+
+const SEASON_LEVEL_OPTIONS: { value: SeasonLevel; label: string; description: string; color: string }[] = [
+  { value: 'low', label: 'Basse saison', description: 'Tarifs réduits', color: 'bg-emerald-100 text-emerald-700' },
+  { value: 'high', label: 'Haute saison', description: 'Tarif de référence par défaut', color: 'bg-amber-100 text-amber-700' },
+  { value: 'peak', label: 'Peak / Fêtes', description: 'Noël, Nouvel An, etc.', color: 'bg-red-100 text-red-700' },
 ];
 
 // ============================================================================
@@ -80,6 +88,7 @@ type FormData = {
   name: string;
   code: string;
   season_type: SeasonType;
+  season_level: SeasonLevel;
   start_date: string;
   end_date: string;
   weekdays: number[];
@@ -127,6 +136,7 @@ export default function SeasonEditor({
     name: '',
     code: '',
     season_type: 'fixed',
+    season_level: 'high',
     start_date: '',
     end_date: '',
     weekdays: [],
@@ -139,12 +149,33 @@ export default function SeasonEditor({
   // Initialize form with season data
   useEffect(() => {
     if (season) {
+      // For 'fixed' seasons, ensure dates are in YYYY-MM-DD format
+      // For 'recurring' seasons, dates can be in MM-DD format
+      let startDate = season.start_date || '';
+      let endDate = season.end_date || '';
+
+      if (season.season_type === 'fixed') {
+        // If dates are in MM-DD format (length 5), convert them to YYYY-MM-DD
+        // using the year from the season or current year
+        if (startDate.length === 5) {
+          const year = season.year?.split('-')[0] || new Date().getFullYear().toString();
+          startDate = `${year}-${startDate}`;
+        }
+        if (endDate.length === 5) {
+          // For end date, use the second year if it's a range (e.g., "2026-2027")
+          const yearParts = season.year?.split('-') || [];
+          const year = yearParts.length > 1 ? yearParts[1] : (yearParts[0] || new Date().getFullYear().toString());
+          endDate = `${year}-${endDate}`;
+        }
+      }
+
       setFormData({
         name: season.name || '',
         code: season.code || '',
         season_type: season.season_type || 'fixed',
-        start_date: season.start_date || '',
-        end_date: season.end_date || '',
+        season_level: season.season_level || 'high',
+        start_date: startDate,
+        end_date: endDate,
         weekdays: season.weekdays || [],
         priority: season.priority || 1,
         is_active: season.is_active ?? true,
@@ -168,6 +199,7 @@ export default function SeasonEditor({
       ...prev,
       name: preset.name,
       code: preset.code,
+      season_level: preset.level,
     }));
   };
 
@@ -226,11 +258,27 @@ export default function SeasonEditor({
 
     let startDate = formData.start_date;
     let endDate = formData.end_date;
+    let year: string | undefined = undefined;
 
     // Format dates based on season type
     if (formData.season_type === 'recurring') {
+      // For recurring seasons, keep MM-DD format, no year
       startDate = formatDateForRecurring(startDate);
       endDate = formatDateForRecurring(endDate);
+    } else if (formData.season_type === 'fixed') {
+      // For fixed seasons, ensure YYYY-MM-DD and extract year
+      startDate = formatDateForFixed(startDate);
+      endDate = formatDateForFixed(endDate);
+
+      // Extract year from dates
+      const startYear = startDate.substring(0, 4);
+      const endYear = endDate.substring(0, 4);
+
+      if (startYear === endYear) {
+        year = startYear;
+      } else {
+        year = `${startYear}-${endYear}`;
+      }
     }
 
     const submitData = {
@@ -238,8 +286,10 @@ export default function SeasonEditor({
       name: formData.name,
       code: formData.code,
       season_type: formData.season_type,
+      season_level: formData.season_level,
       start_date: formData.season_type !== 'weekday' ? startDate : undefined,
       end_date: formData.season_type !== 'weekday' ? endDate : undefined,
+      year: formData.season_type === 'fixed' ? year : undefined,
       weekdays: formData.season_type === 'weekday' ? formData.weekdays : undefined,
       priority: formData.priority,
       is_active: formData.is_active,
@@ -370,6 +420,34 @@ export default function SeasonEditor({
                 );
               })}
             </div>
+          </div>
+
+          {/* Season Level */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Niveau tarifaire
+              <span className="ml-1 text-gray-400 font-normal">(pour le tarif de référence)</span>
+            </label>
+            <div className="flex gap-2">
+              {SEASON_LEVEL_OPTIONS.map((level) => (
+                <button
+                  key={level.value}
+                  type="button"
+                  onClick={() => handleChange('season_level', level.value)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all border ${
+                    formData.season_level === level.value
+                      ? `${level.color} border-transparent`
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                  title={level.description}
+                >
+                  {level.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              Le tarif "Haute saison" est utilisé comme référence par défaut.
+            </p>
           </div>
 
           {/* Priority */}

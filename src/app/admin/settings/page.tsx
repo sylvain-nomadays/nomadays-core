@@ -3,12 +3,7 @@
 import Link from 'next/link';
 import {
   Settings,
-  Building2,
-  Palette,
-  FileText,
-  Globe,
   Users,
-  DollarSign,
   Bell,
   Shield,
   ChevronRight,
@@ -23,40 +18,6 @@ interface SettingsCategory {
 }
 
 const settingsCategories: SettingsCategory[] = [
-  {
-    title: 'Agences partenaires',
-    description: 'Gérez vos partenaires B2B et leur branding white-label',
-    href: '/admin/settings/partner-agencies',
-    icon: Building2,
-  },
-  {
-    title: 'Thématiques de voyage',
-    description: 'Configurez les thèmes disponibles pour vos circuits',
-    href: '/admin/settings/themes',
-    icon: Palette,
-    badge: 'À venir',
-  },
-  {
-    title: 'Templates par pays',
-    description: 'Définissez les inclus/exclus et formalités par destination',
-    href: '/admin/settings/country-templates',
-    icon: Globe,
-    badge: 'À venir',
-  },
-  {
-    title: 'Taux de TVA',
-    description: 'Configurez les taux de TVA par pays',
-    href: '/admin/settings/vat-rates',
-    icon: DollarSign,
-    badge: 'À venir',
-  },
-  {
-    title: 'Modèles de documents',
-    description: 'Personnalisez vos modèles de devis et contrats',
-    href: '/admin/settings/document-templates',
-    icon: FileText,
-    badge: 'À venir',
-  },
   {
     title: 'Utilisateurs',
     description: 'Gérez les comptes utilisateurs et les permissions',
@@ -86,11 +47,11 @@ export default function SettingsPage() {
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
-          <Settings className="w-7 h-7 text-emerald-600" />
-          Paramètres
+          <Settings className="w-7 h-7 text-slate-600" />
+          Administration
         </h1>
         <p className="text-gray-500 mt-1">
-          Configurez votre espace de travail et vos préférences
+          Paramètres système, utilisateurs et sécurité
         </p>
       </div>
 
@@ -107,13 +68,13 @@ export default function SettingsPage() {
               className={`block bg-white rounded-xl shadow-sm border border-gray-100 p-5 transition-all ${
                 isDisabled
                   ? 'opacity-60 cursor-not-allowed'
-                  : 'hover:shadow-md hover:border-emerald-200'
+                  : 'hover:shadow-md hover:border-slate-200'
               }`}
               onClick={(e) => isDisabled && e.preventDefault()}
             >
               <div className="flex items-center gap-4">
-                <div className={`p-3 rounded-lg ${isDisabled ? 'bg-gray-100' : 'bg-emerald-50'}`}>
-                  <Icon className={`w-6 h-6 ${isDisabled ? 'text-gray-400' : 'text-emerald-600'}`} />
+                <div className={`p-3 rounded-lg ${isDisabled ? 'bg-gray-100' : 'bg-slate-50'}`}>
+                  <Icon className={`w-6 h-6 ${isDisabled ? 'text-gray-400' : 'text-slate-600'}`} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">

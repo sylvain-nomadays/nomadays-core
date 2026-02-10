@@ -302,7 +302,8 @@ export async function getDossiersGroupedByStatus() {
 
   if (error) {
     console.error('Error fetching dossiers:', error)
-    throw new Error(`Failed to fetch dossiers: ${error.message} (${error.code})`)
+    // Return empty object instead of crashing — table may not exist yet
+    return {} as Record<DossierStatus, never[]>
   }
 
   // Group by status
@@ -332,7 +333,8 @@ export async function getPipelineStats() {
 
   if (error) {
     console.error('Error fetching pipeline stats:', error)
-    throw new Error('Failed to fetch pipeline stats')
+    // Return empty stats instead of crashing — table may not exist yet
+    return { total: 0 } as Record<string, number>
   }
 
   const stats: Record<string, number> = { total: 0 }

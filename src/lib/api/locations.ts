@@ -1,11 +1,13 @@
 /**
  * Location API module
- * Gère les locations indépendantes des trips (pour items et fournisseurs)
+ * Gère les locations indépendantes des trips (pour filtrage et organisation)
+ * Représente des destinations géographiques : Chiang Mai, Bangkok, Marrakech, etc.
  */
 
 import { apiClient } from './client';
 import type {
   Location,
+  LocationType,
   CreateLocationDTO,
   UpdateLocationDTO,
   PaginatedResponse,
@@ -21,7 +23,9 @@ import type {
  * Liste les locations avec filtres optionnels
  */
 export async function getLocations(params?: {
+  location_type?: LocationType;
   country_code?: string;
+  parent_id?: number;
   search?: string;
   is_active?: boolean;
   page?: number;
@@ -29,7 +33,9 @@ export async function getLocations(params?: {
 }): Promise<PaginatedResponse<Location>> {
   const searchParams = new URLSearchParams();
 
+  if (params?.location_type) searchParams.append('location_type', params.location_type);
   if (params?.country_code) searchParams.append('country_code', params.country_code);
+  if (params?.parent_id !== undefined) searchParams.append('parent_id', String(params.parent_id));
   if (params?.search) searchParams.append('search', params.search);
   if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active));
   if (params?.page) searchParams.append('page', String(params.page));
@@ -37,6 +43,16 @@ export async function getLocations(params?: {
 
   const query = searchParams.toString();
   return apiClient.get<PaginatedResponse<Location>>(`/locations${query ? `?${query}` : ''}`);
+}
+
+/**
+ * Liste les locations par pays
+ */
+export async function getLocationsByCountry(countryCode: string, locationType?: LocationType): Promise<Location[]> {
+  const params = new URLSearchParams();
+  if (locationType) params.append('location_type', locationType);
+  const query = params.toString();
+  return apiClient.get<Location[]>(`/locations/by-country/${countryCode}${query ? `?${query}` : ''}`);
 }
 
 /**

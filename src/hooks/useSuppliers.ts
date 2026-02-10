@@ -25,6 +25,8 @@ export interface SuppliersFilters {
   // Classification filters
   star_rating_min?: number;         // Pour hébergements: minimum étoiles
   star_rating_max?: number;         // Pour hébergements: maximum étoiles
+  // Contract status filter
+  contract_status?: ContractValidityStatus;  // Filter by calculated contract status
   // Tags
   tags?: string[];                  // Filtrer par tags
   // Pagination
@@ -53,6 +55,9 @@ export function useSuppliers(filters: SuppliersFilters = {}) {
     if (filters.star_rating_min) params.append('star_rating_min', String(filters.star_rating_min));
     if (filters.star_rating_max) params.append('star_rating_max', String(filters.star_rating_max));
 
+    // Contract status filter
+    if (filters.contract_status) params.append('contract_status', filters.contract_status);
+
     // Tags (send as comma-separated)
     if (filters.tags && filters.tags.length > 0) {
       params.append('tags', filters.tags.join(','));
@@ -74,12 +79,29 @@ export function useSuppliers(filters: SuppliersFilters = {}) {
     filters.city,
     filters.star_rating_min,
     filters.star_rating_max,
+    filters.contract_status,
     filters.tags,
     filters.page,
     filters.page_size,
   ]);
 
-  return useApi(fetcher);
+  return useApi(fetcher, {
+    immediate: true,
+    deps: [
+      filters.type,
+      filters.status,
+      filters.search,
+      filters.location_id,
+      filters.country_code,
+      filters.city,
+      filters.star_rating_min,
+      filters.star_rating_max,
+      filters.contract_status,
+      filters.tags?.join(','),
+      filters.page,
+      filters.page_size,
+    ],
+  });
 }
 
 /**
@@ -169,10 +191,12 @@ export function useUpdateSupplier() {
 
 /**
  * Hook to delete a supplier
+ * @param permanent - Si true, supprime définitivement. Sinon, désactive seulement.
  */
 export function useDeleteSupplier() {
-  const mutationFn = useCallback(async (id: number) => {
-    return apiClient.delete<void>(`/suppliers/${id}`);
+  const mutationFn = useCallback(async ({ id, permanent = false }: { id: number; permanent?: boolean }) => {
+    const query = permanent ? '?permanent=true' : '';
+    return apiClient.delete<void>(`/suppliers/${id}${query}`);
   }, []);
 
   return useMutation(mutationFn);
@@ -357,4 +381,33 @@ export function useSuppliersWithExpiredContracts() {
   }, []);
 
   return useApi(fetcher);
+}
+
+// ============================================================================
+// Contract Workflow Actions
+// ============================================================================
+
+export type ContractWorkflowStatus = 'needs_contract' | 'contract_requested' | 'dynamic_pricing';
+
+/**
+ * Hook to update supplier contract workflow status
+ * Used to request a contract or mark as dynamic pricing
+ */
+export function useUpdateContractWorkflow() {
+  const mutationFn = useCallback(
+    async ({
+      id,
+      status,
+    }: {
+      id: number;
+      status: ContractWorkflowStatus;
+    }) => {
+      return apiClient.patch<Supplier>(`/suppliers/${id}/contract-workflow`, {
+        contract_workflow_status: status,
+      });
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
 }

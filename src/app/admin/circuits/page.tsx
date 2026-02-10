@@ -19,9 +19,44 @@ import {
   Clock,
   Loader2,
   AlertCircle,
+  MoreVertical,
+  MapPin,
+  ExternalLink,
 } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useTrips, useDeleteTrip, useDuplicateTrip } from '@/hooks/useTrips';
 import { Trip, TripType } from '@/lib/api/types';
+
+/**
+ * Extract unique main locations from trip for a quick route overview.
+ * Prefers locations_summary (computed by backend from day locations),
+ * falls back to day.location_from/location_to text fields.
+ */
+function getTripLocations(trip: Trip): string[] {
+  // Prefer backend-computed summary (includes location FK names)
+  if (trip.locations_summary && trip.locations_summary.length > 0) {
+    return trip.locations_summary.slice(0, 5);
+  }
+  // Fallback to legacy text fields
+  if (!trip.days || trip.days.length === 0) return [];
+  const locations: string[] = [];
+  for (const day of trip.days) {
+    const name = day.location_name || day.location_from;
+    if (name && !locations.includes(name)) {
+      locations.push(name);
+    }
+    if (day.location_to && !locations.includes(day.location_to)) {
+      locations.push(day.location_to);
+    }
+  }
+  return locations.slice(0, 5);
+}
 
 // Tab configuration
 const tabs: { id: TripType | 'all'; label: string; icon: React.ComponentType<{ className?: string }>; description: string }[] = [
@@ -296,7 +331,7 @@ export default function CircuitsPage() {
                     Circuit
                   </th>
                   <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Destination
+                    Étapes
                   </th>
                   <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Durée
@@ -314,8 +349,8 @@ export default function CircuitsPage() {
                   <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Statut
                   </th>
-                  <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
+                  <th className="w-12 px-3 py-3">
+                    <span className="sr-only">Actions</span>
                   </th>
                 </tr>
               </thead>
@@ -324,24 +359,42 @@ export default function CircuitsPage() {
                   <tr key={trip.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4">
                       <div>
-                        <Link
-                          href={`/admin/circuits/${trip.id}`}
-                          className="font-medium text-gray-900 hover:text-emerald-600 transition-colors"
-                        >
-                          {trip.name}
-                        </Link>
-                        <div className="text-sm text-gray-500">{trip.reference}</div>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/admin/circuits/${trip.id}`}
+                            className="font-medium text-gray-900 hover:text-emerald-600 transition-colors"
+                          >
+                            {trip.name}
+                          </Link>
+                          {trip.type === 'gir' && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-semibold rounded uppercase tracking-wider">
+                              <Users className="w-3 h-3" />
+                              GIR
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-gray-500">
+                          {trip.reference}
+                          {trip.destination_country && (
+                            <span>{countryFlags[trip.destination_country] || ''}</span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">
-                          {countryFlags[trip.destination_country || ''] || '🌍'}
-                        </span>
-                        <span className="text-sm text-gray-600">
-                          {trip.destination_country}
-                        </span>
-                      </div>
+                      {(() => {
+                        const locations = getTripLocations(trip);
+                        return locations.length > 0 ? (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                            <span className="text-sm text-gray-600">
+                              {locations.join(' → ')}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-sm text-gray-400">—</span>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-1 text-sm text-gray-600">
@@ -384,39 +437,46 @@ export default function CircuitsPage() {
                         {statusLabels[trip.status] || trip.status}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Link
-                          href={`/admin/circuits/${trip.id}`}
-                          className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                          title="Voir"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </Link>
-                        <Link
-                          href={`/admin/circuits/${trip.id}/edit`}
-                          className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                          title="Modifier"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Link>
-                        <button
-                          onClick={() => handleDuplicate(trip)}
-                          disabled={duplicating}
-                          className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
-                          title="Dupliquer"
-                        >
-                          <Copy className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(trip)}
-                          disabled={deleting}
-                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                          title="Supprimer"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                    <td className="px-3 py-4 text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                            <MoreVertical className="w-4 h-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem asChild>
+                            <Link href={`/admin/circuits/${trip.id}`} className="flex items-center gap-2">
+                              <Edit className="w-4 h-4" />
+                              Modifier
+                            </Link>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem asChild>
+                            <Link href={`/admin/circuits/${trip.id}`} target="_blank" className="flex items-center gap-2">
+                              <ExternalLink className="w-4 h-4" />
+                              Voir sur le site
+                            </Link>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => handleDuplicate(trip)}
+                            disabled={duplicating}
+                            className="flex items-center gap-2"
+                          >
+                            <Copy className="w-4 h-4" />
+                            Dupliquer
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => handleDelete(trip)}
+                            disabled={deleting}
+                            variant="destructive"
+                            className="flex items-center gap-2"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            Supprimer
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </td>
                   </tr>
                 ))}

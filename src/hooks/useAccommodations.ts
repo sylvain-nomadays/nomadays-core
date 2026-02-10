@@ -21,6 +21,9 @@ import type {
   AccommodationStatus,
   AvailabilitySearchParams,
   AvailabilityResult,
+  EarlyBirdDiscount,
+  CreateEarlyBirdDiscountDTO,
+  UpdateEarlyBirdDiscountDTO,
 } from '@/lib/api/types';
 import type { StayRateRequest, StayRateResult, AccommodationFilters } from '@/lib/api/accommodations';
 
@@ -488,6 +491,7 @@ export function useUpdateAccommodationPhoto() {
       photoId: number;
       data: {
         caption?: string;
+        alt_text?: string;
         is_main?: boolean;
         sort_order?: number;
       };
@@ -510,6 +514,29 @@ export function useDeleteAccommodationPhoto() {
   const mutationFn = useCallback(
     async ({ accommodationId, photoId }: { accommodationId: number; photoId: number }) => {
       return apiClient.delete<void>(`/accommodations/${accommodationId}/photos/${photoId}`);
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook to reorder photos
+ */
+export function useReorderAccommodationPhotos() {
+  const mutationFn = useCallback(
+    async ({
+      accommodationId,
+      photoIds,
+    }: {
+      accommodationId: number;
+      photoIds: number[];
+    }) => {
+      return apiClient.post<void>(
+        `/accommodations/${accommodationId}/photos/reorder`,
+        { photo_ids: photoIds }
+      );
     },
     []
   );
@@ -636,6 +663,75 @@ export function useCalculateMultiRoomStay() {
         total_cost: number;
         currency: string;
       }>(`/accommodations/${accommodationId}/calculate-multi-room`, params);
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+// ============================================================================
+// Early Bird Discount Hooks
+// ============================================================================
+
+/**
+ * Hook to fetch early bird discounts for an accommodation
+ */
+export function useEarlyBirdDiscounts(accommodationId: number | null) {
+  const fetcher = useCallback(async () => {
+    if (!accommodationId) throw new Error('Accommodation ID is required');
+    return apiClient.get<EarlyBirdDiscount[]>(`/accommodations/${accommodationId}/early-bird`);
+  }, [accommodationId]);
+
+  return useApi(fetcher, { immediate: !!accommodationId });
+}
+
+/**
+ * Hook to create an early bird discount
+ */
+export function useCreateEarlyBirdDiscount() {
+  const mutationFn = useCallback(async (data: CreateEarlyBirdDiscountDTO) => {
+    return apiClient.post<EarlyBirdDiscount>(
+      `/accommodations/${data.accommodation_id}/early-bird`,
+      data
+    );
+  }, []);
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook to update an early bird discount
+ */
+export function useUpdateEarlyBirdDiscount() {
+  const mutationFn = useCallback(
+    async ({
+      accommodationId,
+      discountId,
+      data,
+    }: {
+      accommodationId: number;
+      discountId: number;
+      data: UpdateEarlyBirdDiscountDTO;
+    }) => {
+      return apiClient.patch<EarlyBirdDiscount>(
+        `/accommodations/${accommodationId}/early-bird/${discountId}`,
+        data
+      );
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook to delete an early bird discount
+ */
+export function useDeleteEarlyBirdDiscount() {
+  const mutationFn = useCallback(
+    async ({ accommodationId, discountId }: { accommodationId: number; discountId: number }) => {
+      return apiClient.delete<void>(`/accommodations/${accommodationId}/early-bird/${discountId}`);
     },
     []
   );

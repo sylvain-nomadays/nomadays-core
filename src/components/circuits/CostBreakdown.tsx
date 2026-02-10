@@ -1,7 +1,9 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Bed, MapPin, Car, Activity, Users, Utensils, MoreHorizontal } from 'lucide-react';
+import {
+  Bed, MapPin, Car, Activity, Users, Utensils, MoreHorizontal,
+} from 'lucide-react';
 import type { Formula, Item } from '@/lib/api/types';
 
 interface CostBreakdownProps {
@@ -24,9 +26,9 @@ interface CategoryBreakdown {
 
 const categoryConfig: Record<string, { icon: React.ComponentType<{ className?: string }>; color: string; bgColor: string }> = {
   HTL: { icon: Bed, color: 'text-blue-600', bgColor: 'bg-blue-100' },
-  GDE: { icon: Users, color: 'text-purple-600', bgColor: 'bg-purple-100' },
   TRS: { icon: Car, color: 'text-orange-600', bgColor: 'bg-orange-100' },
   ACT: { icon: Activity, color: 'text-emerald-600', bgColor: 'bg-emerald-100' },
+  GDE: { icon: Users, color: 'text-purple-600', bgColor: 'bg-purple-100' },
   RES: { icon: Utensils, color: 'text-red-600', bgColor: 'bg-red-100' },
   MIS: { icon: MoreHorizontal, color: 'text-gray-600', bgColor: 'bg-gray-100' },
 };
@@ -43,7 +45,7 @@ export default function CostBreakdown({
 
     formula.items?.forEach(item => {
       const code = item.cost_nature?.code || 'MIS';
-      const name = item.cost_nature?.name || 'Divers';
+      const name = item.cost_nature?.label || item.cost_nature?.name || 'Divers';
 
       if (!categories[code]) {
         const config = categoryConfig[code] ?? categoryConfig.MIS;

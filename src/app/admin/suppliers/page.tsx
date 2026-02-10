@@ -22,125 +22,19 @@ import {
   Edit,
   Trash2,
   XCircle,
+  Send,
+  Zap,
+  Globe,
 } from 'lucide-react';
-import { useSuppliers, useCreateSupplier, getContractStatusDisplay } from '@/hooks/useSuppliers';
-import type { Supplier, SupplierStatus, SupplierType, CreateSupplierDTO, ContractValidityStatus } from '@/lib/api/types';
+import { useSuppliers, useCreateSupplier, useDeleteSupplier, getContractStatusDisplay } from '@/hooks/useSuppliers';
+import { useLocations } from '@/hooks/useLocations';
 import { COUNTRIES, getCountryFlag } from '@/lib/constants/countries';
+import type { Supplier, SupplierStatus, SupplierType, CreateSupplierDTO, ContractValidityStatus } from '@/lib/api/types';
 
-// Extended mock type with contract info
-type MockSupplier = Supplier & {
-  star_rating?: number;
-};
 
-// Fallback mock data with contract status
-const mockSuppliers: MockSupplier[] = [
-  {
-    id: 1,
-    tenant_id: '123',
-    name: 'Riad Jnane Mogador',
-    type: 'accommodation',
-    country_code: 'MA',
-    city: 'Marrakech',
-    address: '16 Derb Sidi Bouloukat, Médina',
-    contact_name: 'Mohamed Alami',
-    contact_email: 'reservation@riadjnane.com',
-    contact_phone: '+212 524 123 456',
-    status: 'active',
-    star_rating: 4,
-    // Contract info
-    active_contract_id: 1,
-    active_contract_name: 'Contrat 2024-2025',
-    contract_valid_to: '2025-04-30',
-    contract_validity_status: 'valid',
-    days_until_contract_expiry: 83,
-    created_at: '2024-01-15T10:00:00Z',
-    updated_at: '2024-12-01T14:30:00Z',
-  },
-  {
-    id: 2,
-    tenant_id: '123',
-    name: 'Bangkok Palace Hotel',
-    type: 'accommodation',
-    country_code: 'TH',
-    city: 'Bangkok',
-    address: 'Sukhumvit Road',
-    contact_name: 'Somchai Prasert',
-    contact_email: 'reservation@bkkpalace.com',
-    contact_phone: '+66 2 123 4567',
-    status: 'active',
-    star_rating: 5,
-    // Contract info - expiring soon
-    active_contract_id: 2,
-    active_contract_name: 'Contrat Haute Saison',
-    contract_valid_to: '2026-02-28',
-    contract_validity_status: 'expiring_soon',
-    days_until_contract_expiry: 22,
-    created_at: '2024-02-20T10:00:00Z',
-    updated_at: '2024-11-15T09:00:00Z',
-  },
-  {
-    id: 3,
-    tenant_id: '123',
-    name: 'Atlas Voyages Transport',
-    type: 'transport',
-    country_code: 'MA',
-    city: 'Casablanca',
-    address: 'Zone industrielle Ain Sebaâ',
-    contact_name: 'Karim Benjelloun',
-    contact_email: 'contact@atlasvoyages.ma',
-    contact_phone: '+212 522 987 654',
-    status: 'active',
-    // Contract info - expired!
-    active_contract_id: 3,
-    active_contract_name: 'Contrat 2024',
-    contract_valid_to: '2025-12-31',
-    contract_validity_status: 'expired',
-    days_until_contract_expiry: -37,
-    created_at: '2024-02-20T10:00:00Z',
-    updated_at: '2024-11-15T09:00:00Z',
-  },
-  {
-    id: 4,
-    tenant_id: '123',
-    name: 'Désert Aventures',
-    type: 'activity',
-    country_code: 'MA',
-    city: 'Merzouga',
-    address: 'Erg Chebbi',
-    contact_name: 'Hassan Oubaha',
-    contact_email: 'info@desertaventures.com',
-    contact_phone: '+212 661 234 567',
-    status: 'active',
-    // Contract info
-    active_contract_id: 4,
-    active_contract_name: 'Contrat annuel',
-    contract_valid_to: '2026-12-31',
-    contract_validity_status: 'valid',
-    days_until_contract_expiry: 328,
-    created_at: '2024-03-10T10:00:00Z',
-    updated_at: '2024-10-20T16:00:00Z',
-  },
-  {
-    id: 5,
-    tenant_id: '123',
-    name: 'Thai Elephant Sanctuary',
-    type: 'activity',
-    country_code: 'TH',
-    city: 'Chiang Mai',
-    address: 'Mae Taeng District',
-    contact_name: 'Nattaya Sriwan',
-    contact_email: 'booking@elephantsanctuary.th',
-    contact_phone: '+66 53 456 789',
-    status: 'pending',
-    // No contract
-    contract_validity_status: 'no_contract',
-    created_at: '2024-12-01T10:00:00Z',
-    updated_at: '2024-12-01T10:00:00Z',
-  },
-];
-
-// Contract status display config
-const contractStatusConfig: Record<ContractValidityStatus, {
+// Unified status config - combines supplier status and contract status
+// "Archivé" is shown when is_active=false, otherwise we show contract status
+const contractStatusConfig: Record<ContractValidityStatus | 'archived', {
   label: string;
   color: string;
   icon: React.ComponentType<{ className?: string }>
@@ -148,8 +42,25 @@ const contractStatusConfig: Record<ContractValidityStatus, {
   valid: { label: 'Contrat OK', color: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
   expiring_soon: { label: 'Expire bientôt', color: 'bg-amber-100 text-amber-700', icon: Clock },
   expired: { label: 'Expiré', color: 'bg-red-100 text-red-700', icon: XCircle },
-  no_contract: { label: 'Sans contrat', color: 'bg-gray-100 text-gray-500', icon: FileText },
+  no_contract: { label: 'Sans contrat', color: 'bg-orange-100 text-orange-700', icon: FileText },
+  contract_requested: { label: 'Contrat demandé', color: 'bg-blue-100 text-blue-700', icon: Send },
+  dynamic_pricing: { label: 'Tarif dynamique', color: 'bg-purple-100 text-purple-700', icon: Zap },
+  ota_only: { label: 'OTA uniquement', color: 'bg-cyan-100 text-cyan-700', icon: Globe },
+  archived: { label: 'Archivé', color: 'bg-gray-200 text-gray-500', icon: XCircle },
 };
+
+// Unified status filter options
+const statusFilterOptions = [
+  { value: '', label: 'Tous les statuts' },
+  { value: 'valid', label: '✅ Contrat OK' },
+  { value: 'expiring_soon', label: '⏰ Expire bientôt' },
+  { value: 'expired', label: '❌ Expiré' },
+  { value: 'no_contract', label: '📄 Sans contrat' },
+  { value: 'contract_requested', label: '📨 Contrat demandé' },
+  { value: 'dynamic_pricing', label: '⚡ Tarif dynamique' },
+  { value: 'ota_only', label: '🌐 OTA uniquement' },
+  { value: 'archived', label: '📦 Archivés' },
+];
 
 const supplierTypes: { value: SupplierType; label: string; icon: string }[] = [
   { value: 'accommodation', label: 'Hébergement', icon: '🏨' },
@@ -160,16 +71,14 @@ const supplierTypes: { value: SupplierType; label: string; icon: string }[] = [
   { value: 'other', label: 'Autre', icon: '📦' },
 ];
 
-const statusConfig: Record<SupplierStatus, { label: string; color: string; icon: React.ComponentType<{ className?: string }> }> = {
-  active: { label: 'Actif', color: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
-  inactive: { label: 'Inactif', color: 'bg-gray-100 text-gray-700', icon: AlertCircle },
-  pending: { label: 'En attente', color: 'bg-amber-100 text-amber-700', icon: AlertCircle },
-};
-
 export default function SuppliersPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<SupplierType | null>(null);
-  const [selectedStatus, setSelectedStatus] = useState<SupplierStatus | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<number | null>(null);
+  const [selectedStatus, setSelectedStatus] = useState<string | null>(null); // Unified status filter
+
+  // Load locations for filter dropdown
+  const { locations, isLoading: locationsLoading } = useLocations({ is_active: true });
   const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [newSupplierData, setNewSupplierData] = useState<Partial<CreateSupplierDTO>>({
     type: 'accommodation',
@@ -185,22 +94,28 @@ export default function SuppliersPage() {
     refetch,
   } = useSuppliers({
     type: selectedType || undefined,
-    status: selectedStatus || undefined,
+    // For 'archived' filter, we pass is_active=false to backend
+    // For contract statuses, we pass contract_status
+    status: selectedStatus === 'archived' ? 'inactive' : undefined,
     search: searchQuery || undefined,
+    location_id: selectedLocation || undefined,
+    contract_status: selectedStatus && selectedStatus !== 'archived' ? selectedStatus as ContractValidityStatus : undefined,
   });
 
   const { mutate: createSupplier, loading: creating } = useCreateSupplier();
+  const { mutate: deleteSupplier, loading: deleting } = useDeleteSupplier();
 
-  // Use API data or fallback to mock
-  // Use API data or fallback to mock
+  // Use API data only - no mock data
   const suppliers = useMemo(() => {
-    if (apiData?.items) {
+    // If we have API data (even empty array), use it
+    if (apiData?.items !== undefined) {
       return apiData.items;
     }
-    return mockSuppliers;
+    // Return empty array while loading or on error
+    return [];
   }, [apiData]);
 
-  // Client-side filtering (for mock data)
+  // Client-side filtering for search (API handles type and status filters)
   const filteredSuppliers = useMemo(() => {
     return suppliers.filter(supplier => {
       const matchesSearch = !searchQuery ||
@@ -209,11 +124,20 @@ export default function SuppliersPage() {
         supplier.contact_name?.toLowerCase().includes(searchQuery.toLowerCase());
 
       const matchesType = !selectedType || supplier.type === selectedType;
-      const matchesStatus = !selectedStatus || supplier.status === selectedStatus;
 
-      return matchesSearch && matchesType && matchesStatus;
+      return matchesSearch && matchesType;
     });
-  }, [suppliers, searchQuery, selectedType, selectedStatus]);
+  }, [suppliers, searchQuery, selectedType]);
+
+  // Helper to get unified status for a supplier
+  const getUnifiedStatus = (supplier: Supplier): keyof typeof contractStatusConfig => {
+    // If archived (inactive), show that first
+    if (supplier.status === 'inactive') {
+      return 'archived';
+    }
+    // Otherwise show contract status
+    return supplier.contract_validity_status || 'no_contract';
+  };
 
   const getTypeLabel = (type: string) => {
     return supplierTypes.find(t => t.value === type)?.label || type;
@@ -226,22 +150,50 @@ export default function SuppliersPage() {
   const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      console.log('[handleCreateSupplier] Submitting:', JSON.stringify(newSupplierData, null, 2));
       await createSupplier(newSupplierData as CreateSupplierDTO);
       setShowNewSupplier(false);
       setNewSupplierData({ type: 'accommodation', country_code: 'TH' });
       refetch();
-    } catch (err) {
-      console.error('Failed to create supplier:', err);
+    } catch (err: unknown) {
+      const error = err as { detail?: string; message?: string; status?: number };
+      console.error('Failed to create supplier:', JSON.stringify(error, null, 2));
+      console.error('Error detail:', error.detail);
+      console.error('Error message:', error.message);
+      console.error('Error status:', error.status);
+      alert(`Erreur: ${error.detail || error.message || 'Échec de la création'}`);
     }
   };
 
-  // Stats
+  const handleDeleteSupplier = async (supplier: Supplier, permanent: boolean = false) => {
+    const message = permanent
+      ? `⚠️ SUPPRESSION DÉFINITIVE ⚠️\n\nÊtes-vous sûr de vouloir supprimer définitivement "${supplier.name}" ?\n\nCette action est IRRÉVERSIBLE et supprimera aussi tous les contrats, hébergements et tarifs associés.`
+      : `Voulez-vous désactiver "${supplier.name}" ?\n\nLe fournisseur sera masqué mais pourra être réactivé plus tard.`;
+
+    if (!confirm(message)) {
+      return;
+    }
+
+    try {
+      await deleteSupplier({ id: supplier.id, permanent });
+      setMenuOpen(null);
+      refetch();
+    } catch (err: unknown) {
+      const error = err as { detail?: string; message?: string };
+      alert(`Erreur: ${error.detail || error.message || 'Échec de la suppression'}`);
+    }
+  };
+
+  // Stats - focus on contract status only
   const stats = useMemo(() => ({
     total: suppliers.length,
-    active: suppliers.filter(s => s.status === 'active').length,
     contractsOk: suppliers.filter(s => s.contract_validity_status === 'valid').length,
-    contractsExpiring: suppliers.filter(s => s.contract_validity_status === 'expiring_soon').length,
-    contractsExpired: suppliers.filter(s => s.contract_validity_status === 'expired').length,
+    needsAction: suppliers.filter(s =>
+      s.contract_validity_status === 'no_contract' ||
+      s.contract_validity_status === 'expired' ||
+      s.contract_validity_status === 'expiring_soon'
+    ).length,
+    archived: suppliers.filter(s => s.status === 'inactive').length,
   }), [suppliers]);
 
   return (
@@ -252,7 +204,6 @@ export default function SuppliersPage() {
           <h1 className="text-2xl font-bold text-gray-900">Fournisseurs</h1>
           <p className="text-gray-500">
             Gérez vos prestataires et partenaires
-            {error && <span className="ml-2 text-amber-600 text-sm">(mode démonstration)</span>}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -280,12 +231,14 @@ export default function SuppliersPage() {
 
       {/* API Error Banner */}
       {error && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3 mb-6">
-          <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3 mb-6">
+          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-amber-800 font-medium">Mode démonstration</p>
-            <p className="text-amber-700 text-sm">
-              Impossible de se connecter à l'API. Les données affichées sont des exemples.
+            <p className="text-red-800 font-medium">Erreur de connexion</p>
+            <p className="text-red-700 text-sm">
+              {typeof error === 'object' && 'detail' in error
+                ? (error as { detail: string }).detail
+                : 'Impossible de se connecter à l\'API. Vérifiez que le backend est démarré.'}
             </p>
           </div>
         </div>
@@ -302,21 +255,21 @@ export default function SuppliersPage() {
             <CheckCircle className="w-5 h-5 text-emerald-500" />
             <div className="text-2xl font-bold text-emerald-600">{stats.contractsOk}</div>
           </div>
-          <div className="text-sm text-gray-500">Contrats à jour</div>
+          <div className="text-sm text-gray-500">Contrats OK</div>
         </div>
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
           <div className="flex items-center gap-2">
-            <Clock className="w-5 h-5 text-amber-500" />
-            <div className="text-2xl font-bold text-amber-600">{stats.contractsExpiring}</div>
+            <AlertCircle className="w-5 h-5 text-orange-500" />
+            <div className="text-2xl font-bold text-orange-600">{stats.needsAction}</div>
           </div>
-          <div className="text-sm text-gray-500">Expirent bientôt</div>
+          <div className="text-sm text-gray-500">Action requise</div>
         </div>
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
           <div className="flex items-center gap-2">
-            <XCircle className="w-5 h-5 text-red-500" />
-            <div className="text-2xl font-bold text-red-600">{stats.contractsExpired}</div>
+            <XCircle className="w-5 h-5 text-gray-400" />
+            <div className="text-2xl font-bold text-gray-500">{stats.archived}</div>
           </div>
-          <div className="text-sm text-gray-500">Contrats expirés</div>
+          <div className="text-sm text-gray-500">Archivés</div>
         </div>
       </div>
 
@@ -352,17 +305,34 @@ export default function SuppliersPage() {
             </select>
           </div>
 
-          {/* Status filter */}
+          {/* Unified Status filter */}
           <select
             value={selectedStatus || ''}
-            onChange={e => setSelectedStatus((e.target.value as SupplierStatus) || null)}
+            onChange={e => setSelectedStatus(e.target.value || null)}
             className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
           >
-            <option value="">Tous les statuts</option>
-            <option value="active">Actifs</option>
-            <option value="pending">En attente</option>
-            <option value="inactive">Inactifs</option>
+            {statusFilterOptions.map(opt => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
+
+          {/* Location filter */}
+          <select
+            value={selectedLocation || ''}
+            onChange={e => setSelectedLocation(e.target.value ? Number(e.target.value) : null)}
+            className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+            disabled={locationsLoading}
+          >
+            <option value="">Toutes les localisations</option>
+            {locations.map(location => (
+              <option key={location.id} value={location.id}>
+                {location.name}
+              </option>
+            ))}
+          </select>
+
         </div>
       </div>
 
@@ -375,8 +345,8 @@ export default function SuppliersPage() {
 
       {/* Suppliers List */}
       {!loading && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="overflow-x-auto">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+          <div>
             <table className="w-full">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
@@ -384,16 +354,15 @@ export default function SuppliersPage() {
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Type</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Localisation</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Contact</th>
-                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">Contrat</th>
                   <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">Statut</th>
                   <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filteredSuppliers.map(supplier => {
-                  const StatusIcon = statusConfig[supplier.status].icon;
-                  const contractStatus = supplier.contract_validity_status || 'no_contract';
-                  const ContractIcon = contractStatusConfig[contractStatus].icon;
+                {filteredSuppliers.map((supplier) => {
+                  // Unified status: archived if inactive, otherwise contract status
+                  const unifiedStatus = getUnifiedStatus(supplier);
+                  const StatusIcon = contractStatusConfig[unifiedStatus].icon;
                   return (
                     <tr key={supplier.id} className="hover:bg-gray-50">
                       <td className="px-4 py-4">
@@ -424,7 +393,11 @@ export default function SuppliersPage() {
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1 text-gray-600">
                           <MapPin className="w-4 h-4" />
-                          <span>{supplier.city}, {getCountryFlag(supplier.country_code || '')} {supplier.country_code}</span>
+                          <span>
+                            {supplier.location_id
+                              ? locations.find(l => l.id === supplier.location_id)?.name || supplier.city || '-'
+                              : supplier.city || '-'}
+                          </span>
                         </div>
                       </td>
                       <td className="px-4 py-4">
@@ -444,43 +417,38 @@ export default function SuppliersPage() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-4 py-4 text-center">
                         <Link
                           href={`/admin/suppliers/${supplier.id}?tab=contracts`}
                           className="block"
                         >
-                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${contractStatusConfig[contractStatus].color}`}>
-                            <ContractIcon className="w-3 h-3" />
-                            {contractStatusConfig[contractStatus].label}
+                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${contractStatusConfig[unifiedStatus].color}`}>
+                            <StatusIcon className="w-3 h-3" />
+                            {contractStatusConfig[unifiedStatus].label}
                           </span>
-                          {supplier.contract_valid_to && contractStatus !== 'no_contract' && (
+                          {supplier.contract_valid_to && unifiedStatus !== 'no_contract' && unifiedStatus !== 'archived' && (
                             <div className="text-xs text-gray-500 mt-1">
-                              {contractStatus === 'expired' ? 'Expiré le ' : 'Expire le '}
+                              {unifiedStatus === 'expired' ? 'Expiré le ' : 'Expire le '}
                               {new Date(supplier.contract_valid_to).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
                             </div>
                           )}
                         </Link>
                       </td>
                       <td className="px-4 py-4 text-center">
-                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${statusConfig[supplier.status].color}`}>
-                          <StatusIcon className="w-3 h-3" />
-                          {statusConfig[supplier.status].label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-4 text-center relative">
-                        <button
-                          onClick={() => setMenuOpen(menuOpen === supplier.id ? null : supplier.id)}
-                          className="p-2 hover:bg-gray-100 rounded-lg"
-                        >
-                          <MoreVertical className="w-4 h-4 text-gray-400" />
-                        </button>
-                        {menuOpen === supplier.id && (
-                          <>
-                            <div
-                              className="fixed inset-0 z-10"
-                              onClick={() => setMenuOpen(null)}
-                            />
-                            <div className="absolute right-4 top-full mt-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20 w-40">
+                        <div className="relative inline-block">
+                          <button
+                            onClick={() => setMenuOpen(menuOpen === supplier.id ? null : supplier.id)}
+                            className="p-2 hover:bg-gray-100 rounded-lg"
+                          >
+                            <MoreVertical className="w-4 h-4 text-gray-400" />
+                          </button>
+                          {menuOpen === supplier.id && (
+                            <>
+                              <div
+                                className="fixed inset-0 z-40"
+                                onClick={() => setMenuOpen(null)}
+                              />
+                              <div className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-200 py-1 min-w-[200px] z-50">
                               <Link
                                 href={`/admin/suppliers/${supplier.id}`}
                                 className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
@@ -495,13 +463,38 @@ export default function SuppliersPage() {
                                 <Edit className="w-4 h-4" />
                                 Modifier
                               </Link>
-                              <button className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 w-full text-left">
-                                <Trash2 className="w-4 h-4" />
-                                Supprimer
+                              <button
+                                onClick={() => handleDeleteSupplier(supplier, false)}
+                                disabled={deleting}
+                                className="flex items-center gap-2 px-3 py-2 text-sm text-amber-600 hover:bg-amber-50 w-full text-left disabled:opacity-50"
+                              >
+                                <XCircle className="w-4 h-4" />
+                                {deleting ? 'En cours...' : 'Désactiver'}
                               </button>
-                            </div>
-                          </>
-                        )}
+                              <button
+                                onClick={() => handleDeleteSupplier(supplier, true)}
+                                disabled={deleting}
+                                className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 w-full text-left disabled:opacity-50"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                                {deleting ? 'En cours...' : 'Supprimer définitivement'}
+                              </button>
+                              {/* Link to contracts tab for contract management */}
+                              {(supplier.contract_validity_status === 'no_contract' || supplier.contract_validity_status === 'expired') && (
+                                <>
+                                  <div className="border-t border-gray-100 my-1" />
+                                  <Link
+                                    href={`/admin/suppliers/${supplier.id}?tab=contracts`}
+                                    className="flex items-center gap-2 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50"
+                                  >
+                                    Gérer contrats
+                                  </Link>
+                                </>
+                              )}
+                              </div>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

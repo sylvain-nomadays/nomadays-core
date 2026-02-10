@@ -22,7 +22,7 @@ import type {
 export function useSupplierPaymentTerms(supplierId: number | null) {
   const fetcher = useCallback(async () => {
     if (!supplierId) throw new Error('Supplier ID is required');
-    return apiClient.get<PaymentTerms[]>(`/suppliers/${supplierId}/payment-terms`);
+    return apiClient.get<PaymentTerms[]>(`/payment-terms?supplier_id=${supplierId}`);
   }, [supplierId]);
 
   return useApi(fetcher, { immediate: !!supplierId });

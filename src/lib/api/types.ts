@@ -69,6 +69,7 @@ export interface Trip {
   version?: number;
   created_at: string;
   updated_at: string;
+  locations_summary?: string[];
   days?: TripDay[];
   pax_configs?: TripPaxConfig[];
   formulas?: Formula[];
@@ -93,13 +94,78 @@ export interface TripDay {
   id: number;
   trip_id: number;
   day_number: number;
+  day_number_end?: number | null;
   title?: string;
   description?: string;
   location_from?: string;
   location_to?: string;
+  location_id?: number | null;
+  location_name?: string | null;
   overnight_city?: string | null;
   sort_order?: number;
+  breakfast_included?: boolean;
+  lunch_included?: boolean;
+  dinner_included?: boolean;
   formulas?: Formula[];
+  photos?: TripPhoto[];
+}
+
+/**
+ * Photo de circuit (générée par IA ou uploadée manuellement)
+ * Organisée par: Destination / Type / Attraction / nom-seo.avif
+ */
+export interface TripPhoto {
+  id: number;
+  trip_id: number;
+  trip_day_id?: number;
+  day_number?: number;
+
+  // SEO nomenclature
+  destination?: string;
+  attraction_type?: string;
+  attraction_slug?: string;
+  seo_filename?: string;
+
+  // URLs
+  url: string;
+  thumbnail_url?: string;
+  storage_path?: string;
+
+  // Optimized variants
+  url_avif?: string;
+  url_webp?: string;
+  url_medium?: string;
+  url_large?: string;
+  url_hero?: string;
+  srcset_json?: SrcsetEntry[];
+  lqip_data_url?: string;
+
+  // Metadata
+  width?: number;
+  height?: number;
+  alt_text?: string;
+  alt_text_json?: Record<string, string>;
+  caption_json?: Record<string, string>;
+
+  // AI generation
+  ai_prompt?: string;
+  ai_model?: string;
+  ai_generated_at?: string;
+
+  // Flags
+  is_hero: boolean;
+  is_ai_generated: boolean;
+  is_processed: boolean;
+  sort_order: number;
+}
+
+export interface SrcsetEntry {
+  url: string;
+  width: number;
+  height?: number;
+  format: 'avif' | 'webp';
+  size: string;
+  file_size?: number;
 }
 
 export interface TripPaxConfig {
@@ -117,28 +183,94 @@ export interface TripPaxConfig {
 }
 
 // Formula and Item types
+export type BlockType = 'text' | 'activity' | 'accommodation' | 'transport' | 'service';
+
+/** Modes de déplacement pour les blocs transport */
+export type TransportMode =
+  | 'driving'   // Route / Transfert
+  | 'flight'    // Vol
+  | 'transit'   // Train
+  | 'boat'      // Bateau
+  | 'walking'   // Trek / Randonnée
+  | 'horse'     // Cheval
+  | 'camel'     // Chameau
+  | 'bicycle'   // Vélo
+  | 'kayak';    // Kayak
+
+/** Métadonnées transport (stockées en JSON dans description_html) */
+export interface TransportMeta {
+  travel_mode: TransportMode;
+  narrative_text?: string;
+  location_from_name?: string;
+  location_to_name?: string;
+  location_from_place_id?: string;
+  location_to_place_id?: string;
+  from_location_id?: number;
+  to_location_id?: number;
+  distance_km?: number;
+  duration_minutes?: number;
+}
+
+/** Liaison transport template entre 2 destinations */
+export interface LocationLink {
+  id: number;
+  from_location_id: number;
+  to_location_id: number;
+  from_location_name?: string;
+  to_location_name?: string;
+  travel_mode: TransportMode;
+  duration_minutes?: number;
+  distance_km?: number;
+  narrative_text?: string;
+}
+
 export interface Formula {
   id: number;
   trip_id?: number;
   trip_day_id?: number;
+  is_transversal?: boolean;
   name: string;
   description?: string;
   description_html?: string;
   is_default?: boolean;
-  service_day_start?: number;
-  service_day_end?: number;
+  service_day_start?: number | null;
+  service_day_end?: number | null;
   sort_order?: number;
+  block_type?: BlockType;
+  parent_block_id?: number | null;
+  condition_id?: number | null;
+  children?: Formula[];
   items?: Item[];
-  conditions?: Condition[];
 }
+
+// Condition system: tenant-level conditions with options
+export interface ConditionOption {
+  id: number;
+  condition_id: number;
+  label: string;
+  sort_order: number;
+}
+
+export type ConditionScope = 'all' | 'accommodation' | 'service' | 'accompaniment';
 
 export interface Condition {
   id: number;
-  formula_id: number;
-  field: string;
-  operator: string;
-  value: string;
-  action: string;
+  name: string;
+  description?: string | null;
+  applies_to: ConditionScope;
+  options: ConditionOption[];
+}
+
+export interface TripCondition {
+  id: number;
+  trip_id: number;
+  condition_id: number;
+  condition_name: string;
+  applies_to: ConditionScope;
+  selected_option_id?: number | null;
+  selected_option_label?: string | null;
+  is_active: boolean;
+  options: ConditionOption[];
 }
 
 export type PricingMethod = 'quotation' | 'margin' | 'markup' | 'amount' | 'fixed';
@@ -146,11 +278,15 @@ export type RatioType = 'ratio' | 'set';
 export type TimesType = 'service_days' | 'total' | 'fixed';
 export type RatioRule = 'per_person' | 'per_room' | 'per_vehicle' | 'per_group';
 
+export type PaymentFlow = 'booking' | 'advance' | 'purchase_order' | 'payroll' | 'manual';
+
 export interface Item {
   id: number;
   formula_id: number;
   name: string;
   cost_nature_id?: number;
+  cost_nature_code?: string;  // local only — used by ItemEditor for pre-selection (code is always unique)
+  payment_flow?: PaymentFlow;
   supplier_id?: number | null;
   location_id?: number | null;    // Référence à Location
   rate_catalog_id?: number;
@@ -168,10 +304,16 @@ export interface Item {
   times_value?: number;
   day_start?: number;
   day_end?: number;
+  condition_option_id?: number | null;
+  /** Whether this item's unit_cost includes VAT (TTC=true, HT=false) */
+  price_includes_vat?: boolean;
+  /** Which pax categories count for selecting the price tier (comma-separated, null = use ratio_categories) */
+  tier_categories?: string;
   sort_order?: number;
   notes?: string;
   cost_nature?: CostNature;
   seasons?: ItemSeason[];
+  price_tiers?: ItemPriceTier[];
   location?: Location;            // Relation optionnelle
 }
 
@@ -185,12 +327,51 @@ export interface ItemSeason {
   cost_override?: number;
 }
 
+export interface ItemPriceTier {
+  id?: number;
+  pax_min: number;
+  pax_max: number;
+  unit_cost: number;
+  /** Category-specific % adjustments, e.g. {"child": -10, "baby": -100} */
+  category_adjustments_json?: Record<string, number>;
+  sort_order?: number;
+}
+
+export type PaxGroupType = 'tourist' | 'staff' | 'leader';
+
+export interface PaxCategory {
+  id: number;
+  code: string;
+  label: string;
+  group_type: PaxGroupType;
+  age_min?: number;
+  age_max?: number;
+  counts_for_pricing: boolean;
+  is_active: boolean;
+  is_system: boolean;
+  sort_order: number;
+}
+
 // Supplier types
 export type SupplierType = 'accommodation' | 'activity' | 'transport' | 'restaurant' | 'guide' | 'other';
 export type SupplierStatus = 'active' | 'inactive' | 'pending';
 
 // Statut du contrat agrégé (calculé côté backend)
-export type ContractValidityStatus = 'valid' | 'expiring_soon' | 'expired' | 'no_contract';
+export type ContractValidityStatus =
+  | 'valid'              // Contrat actif et valide
+  | 'expiring_soon'      // Contrat expire dans les 30 jours
+  | 'expired'            // Contrat expiré
+  | 'no_contract'        // Pas de contrat
+  | 'contract_requested' // Contrat demandé, en attente
+  | 'dynamic_pricing'    // Pas de contrat nécessaire, tarif dynamique
+  | 'ota_only';          // Réservation OTA uniquement (Booking, Expedia...)
+
+// Statut du workflow contrat (géré par l'utilisateur)
+export type ContractWorkflowStatus =
+  | 'needs_contract'     // Par défaut: a besoin d'un contrat
+  | 'contract_requested' // Logistique a demandé le contrat
+  | 'dynamic_pricing'    // Pas de contrat nécessaire, tarifs au cas par cas
+  | 'ota_only';          // Pas de contrat, réservation uniquement via OTA
 
 // ============================================================================
 // Payment Terms Types (Conditions de paiement fournisseur)
@@ -325,13 +506,14 @@ export interface Supplier {
   id: number;
   tenant_id: string;
   name: string;
-  type: SupplierType;                   // Type PRINCIPAL (hébergement, transport, etc.)
+  types: SupplierType[];                // Types du fournisseur (ex: ['accommodation', 'activity'])
+  type: SupplierType;                   // Type PRINCIPAL (premier du tableau) - pour rétrocompatibilité
   status: SupplierStatus;
 
   // ===== Services proposés =====
   // Un fournisseur peut proposer des services de types différents de son type principal
   // Ex: Un hôtel (type=accommodation) peut proposer des activités et des transfers
-  additional_service_types?: SupplierType[];  // Types de services additionnels
+  additional_service_types?: SupplierType[];  // Types de services additionnels (legacy)
   services?: SupplierService[];               // Détail des services proposés (relation)
 
   // ===== Contact principal =====
@@ -365,13 +547,19 @@ export interface Supplier {
   address?: string;
   lat?: number;
   lng?: number;
+  google_place_id?: string;           // ID Google Places pour validation adresse
 
   // ===== Classification (pour hébergements) =====
   star_rating?: number;               // 1-5 étoiles
 
   // ===== Informations commerciales =====
   tax_id?: string;
+  is_vat_registered?: boolean;          // Assujetti TVA = TVA récupérable sur factures
   default_currency?: string;
+
+  // ===== Entité de facturation (pour la logistique) =====
+  billing_entity_name?: string;         // Nom alternatif si différent du fournisseur
+  billing_entity_note?: string;         // Note pour la logistique
 
   // ===== Conditions de paiement =====
   payment_terms_text?: string;        // Ex: "Net 30" (description simple)
@@ -387,7 +575,10 @@ export interface Supplier {
   // ===== Tags =====
   tags?: string[];                    // ['boutique', 'famille', 'luxe', 'eco', ...]
 
-  // ===== Statut Contrat (agrégé) =====
+  // ===== Workflow Contrat (géré par l'utilisateur) =====
+  contract_workflow_status?: ContractWorkflowStatus;
+
+  // ===== Statut Contrat (calculé depuis les contrats) =====
   active_contract_id?: number | null;
   active_contract_name?: string;
   contract_valid_from?: string;
@@ -691,6 +882,7 @@ export interface Contract {
   status: ContractStatus;
   currency?: string;
   notes?: string | null;
+  ai_warnings?: string[] | null;  // AI-extracted warnings from PDF contract
   created_at: string;
   updated_at: string;
   rates?: ContractRate[];
@@ -799,13 +991,19 @@ export interface ItemCostDetail {
 export interface CostNature {
   id: number;
   code: string;
-  label?: string;
-  name?: string;
-  generates_booking?: boolean;
-  generates_purchase_order?: boolean;
-  generates_payroll?: boolean;
-  generates_advance?: boolean;
+  label: string;
+  name?: string; // alias for backward compatibility
+  generates_booking: boolean;
+  generates_purchase_order: boolean;
+  generates_payroll: boolean;
+  generates_advance: boolean;
+  vat_recoverable_default?: boolean;
+  accounting_code?: string;
+  is_system?: boolean;
 }
+
+/** @deprecated Use PaymentFlow on Item instead */
+export type CostNatureFlow = PaymentFlow;
 
 // Dossier (client travel inquiry)
 export interface Dossier {
@@ -1043,7 +1241,8 @@ export interface UpdateTravelThemeDTO extends Partial<CreateTravelThemeDTO> {}
 
 export interface CreateSupplierDTO {
   name: string;
-  type: SupplierType;
+  types?: SupplierType[];  // Array of types (new)
+  type?: SupplierType;     // Legacy single type (for backwards compatibility)
 
   // ===== Contact principal =====
   contact_name?: string;
@@ -1081,7 +1280,12 @@ export interface CreateSupplierDTO {
 
   // ===== Commercial =====
   tax_id?: string;
+  is_vat_registered?: boolean;          // Assujetti TVA = TVA récupérable
   default_currency?: string;
+
+  // ===== Entité de facturation =====
+  billing_entity_name?: string;
+  billing_entity_note?: string;
 
   // ===== Conditions de paiement =====
   payment_terms_text?: string;
@@ -1102,6 +1306,7 @@ export interface CreateSupplierDTO {
 export interface UpdateSupplierDTO extends Partial<CreateSupplierDTO> {
   status?: SupplierStatus;
   is_active?: boolean;
+  contract_workflow_status?: ContractWorkflowStatus;
 }
 
 // ============================================================================
@@ -1330,6 +1535,7 @@ export interface CreateItemDTO {
   ratio_type?: RatioType;
   times_type?: TimesType;
   times_value?: number;
+  price_includes_vat?: boolean;
 }
 
 // ============================================================================
@@ -1337,7 +1543,7 @@ export interface CreateItemDTO {
 // ============================================================================
 
 export type DescriptionTone = 'marketing_emotionnel' | 'aventure' | 'familial' | 'factuel';
-export type LocationType = 'overnight' | 'waypoint' | 'poi' | 'activity';
+export type TripLocationType = 'overnight' | 'waypoint' | 'poi' | 'activity';
 export type TravelMode = 'driving' | 'walking' | 'transit' | 'flight' | 'boat';
 export type TemplateType = 'inclusions' | 'exclusions' | 'formalities' | 'booking_conditions' | 'cancellation_policy' | 'general_info';
 
@@ -1383,7 +1589,7 @@ export interface TripLocation {
   country_code?: string;
   region?: string;
   day_number?: number;
-  location_type: LocationType;
+  location_type: TripLocationType;
   description?: string;
   sort_order: number;
 }
@@ -1397,7 +1603,7 @@ export interface CreateTripLocationDTO {
   country_code?: string;
   region?: string;
   day_number?: number;
-  location_type?: LocationType;
+  location_type?: TripLocationType;
   description?: string;
   sort_order?: number;
 }
@@ -1590,36 +1796,44 @@ export interface CreatePartnerAgencyDTO {
 export interface UpdatePartnerAgencyDTO extends Partial<CreatePartnerAgencyDTO> {}
 
 // ============================================================================
-// Location Types (indépendant des trips - pour items et fournisseurs)
+// Location Types (indépendant des trips - pour filtrage et organisation)
+// Représente des destinations géographiques : Chiang Mai, Bangkok, Marrakech, etc.
 // ============================================================================
+
+export type LocationType = 'city' | 'region' | 'country' | 'area' | 'neighborhood';
 
 export interface Location {
   id: number;
   tenant_id: string;
   name: string;
-  place_id?: string;           // Google Place ID
+  slug?: string;                    // URL-friendly
+  location_type: LocationType;      // city, region, country, area, neighborhood
+  parent_id?: number;               // Hiérarchie optionnelle
+  country_code?: string;
   lat?: number;
   lng?: number;
-  address?: string;
-  country_code?: string;
-  region?: string;
-  city?: string;
+  google_place_id?: string;         // Google Place ID
   description?: string;
+  content_id?: number;              // Lien futur vers article de contenu
+  sort_order: number;
   is_active: boolean;
-  created_at: string;
-  updated_at: string;
+  // Statistiques
+  accommodation_count?: number;     // Nombre d'hébergements dans cette location
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface CreateLocationDTO {
   name: string;
-  place_id?: string;
+  slug?: string;
+  location_type?: LocationType;     // Défaut: 'city'
+  parent_id?: number;
+  country_code?: string;
   lat?: number;
   lng?: number;
-  address?: string;
-  country_code?: string;
-  region?: string;
-  city?: string;
+  google_place_id?: string;
   description?: string;
+  sort_order?: number;
 }
 
 export interface UpdateLocationDTO extends Partial<CreateLocationDTO> {
@@ -1779,6 +1993,17 @@ export const ROOM_BED_TYPE_LABELS: Record<RoomBedType, string> = {
 // Type de saison pour les tarifs
 export type SeasonType = 'fixed' | 'recurring' | 'weekday';
 
+// Niveau de saison pour le tarif de référence
+// low = basse saison, high = haute saison (référence par défaut), peak = peak/fêtes
+export type SeasonLevel = 'low' | 'high' | 'peak';
+
+// Labels pour les niveaux de saison
+export const SEASON_LEVEL_LABELS: Record<SeasonLevel, string> = {
+  low: 'Basse saison',
+  high: 'Haute saison',
+  peak: 'Peak / Fêtes',
+};
+
 // Statut d'un hébergement
 export type AccommodationStatus = 'active' | 'inactive' | 'pending' | 'archived';
 
@@ -1796,7 +2021,9 @@ export interface Accommodation {
   name: string;
   description?: string;
   description_html?: string;
-  star_rating?: number;          // 1-5 étoiles
+  star_rating?: number;          // 1-5 étoiles (classification officielle)
+  internal_priority?: number;    // Priorité interne (1=primaire, 2=secondaire, etc.)
+  internal_notes?: string;       // Notes internes pour les vendeurs (ex: "pas de twin", "lit supp = matelas")
   check_in_time?: string;        // "14:00"
   check_out_time?: string;       // "11:00"
 
@@ -1804,8 +2031,11 @@ export interface Accommodation {
   location_id?: number;
   location?: Location;
   address?: string;
+  city?: string;
+  country_code?: string;
   lat?: number;
   lng?: number;
+  google_place_id?: string;      // ID Google Places pour validation
 
   // Équipements et services
   amenities?: string[];          // ['wifi', 'pool', 'spa', 'parking', ...]
@@ -1814,9 +2044,23 @@ export interface Accommodation {
   reservation_email?: string;
   reservation_phone?: string;
 
+  // Site web
+  website_url?: string;
+
+  // Entité de facturation (pour la logistique)
+  billing_entity_name?: string;    // Nom alternatif si différent du fournisseur parent
+  billing_entity_note?: string;    // Note pour la logistique
+
   // Intégration externe (RateHawk, HotelBeds, etc.)
   external_provider?: 'ratehawk' | 'hotelbeds' | 'amadeus' | 'manual';
   external_id?: string;          // ID chez le fournisseur externe
+
+  // Lien vers article de contenu (fiche descriptive)
+  content_id?: number;
+
+  // Conditions de paiement (override optionnel - si null, utilise supplier.default_payment_terms)
+  payment_terms_id?: number;
+  payment_terms?: PaymentTerms;
 
   // Photos générales
   photos?: AccommodationPhoto[];
@@ -1826,6 +2070,9 @@ export interface Accommodation {
 
   // Saisons tarifaires
   seasons?: AccommodationSeason[];
+
+  // Early Bird Discounts
+  early_bird_discounts?: EarlyBirdDiscount[];
 
   // Meta
   status: AccommodationStatus;
@@ -1840,12 +2087,58 @@ export interface Accommodation {
  */
 export interface AccommodationPhoto {
   id: number;
-  url: string;
-  thumbnail_url?: string;
-  caption?: string;
-  is_main: boolean;
-  sort_order: number;
+  accommodation_id: number;
   room_category_id?: number;     // NULL = photo générale de l'hôtel
+
+  // URLs
+  url: string;                   // URL principale
+  thumbnail_url?: string;        // Miniature (150px)
+  storage_path?: string;         // Chemin Supabase Storage
+
+  // Variants optimisés (générés par le worker)
+  url_avif?: string;             // Version AVIF optimisée
+  url_webp?: string;             // Version WebP fallback
+  url_medium?: string;           // 800px pour articles
+  url_large?: string;            // 1920px pour hero
+  srcset_json?: string;          // JSON srcset pour responsive
+  lqip_data_url?: string;        // Base64 blur placeholder
+
+  // Metadata
+  original_filename?: string;
+  file_size?: number;            // Bytes
+  mime_type?: string;
+  width?: number;
+  height?: number;
+  caption?: string;
+  alt_text?: string;
+
+  // Flags
+  is_main: boolean;
+  is_processed: boolean;         // true si variants générés
+  sort_order: number;
+
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * DTO pour créer une photo
+ */
+export interface CreateAccommodationPhotoDTO {
+  room_category_id?: number;
+  caption?: string;
+  alt_text?: string;
+  is_main?: boolean;
+}
+
+/**
+ * DTO pour mettre à jour une photo
+ */
+export interface UpdateAccommodationPhotoDTO {
+  caption?: string;
+  alt_text?: string;
+  is_main?: boolean;
+  sort_order?: number;
 }
 
 /**
@@ -1908,10 +2201,15 @@ export interface AccommodationSeason {
   weekdays?: number[];           // [5, 6] = Vendredi et Samedi
 
   // Année (null = toutes les années / récurrent)
-  year?: number;
+  // Peut être "2024" ou "2024-2025" pour les plages
+  year?: string | null;
 
   // Priorité (en cas de chevauchement, la plus haute gagne)
   priority: number;
+
+  // Niveau de saison pour le tarif de référence
+  // low = basse saison, high = haute saison (référence), peak = peak/fêtes
+  season_level: SeasonLevel;
 
   // Multiplicateur ou override
   is_active: boolean;
@@ -1968,6 +2266,124 @@ export const MEAL_PLAN_LABELS: Record<MealPlan, string> = {
   AI: 'All Inclusive',
 };
 
+/**
+ * Early Bird Discount - Réduction pour réservation anticipée
+ * Ex: -15% si réservé 60 jours à l'avance
+ */
+export interface EarlyBirdDiscount {
+  id: number;
+  accommodation_id: number;
+  name: string;                  // "Early Bird 60 jours"
+  days_in_advance: number;       // 60
+  discount_percent: number;      // 15.00 pour 15%
+  discount_amount?: number;      // Alternative: montant fixe
+  discount_currency?: string;
+  valid_from?: string;           // Période de validité
+  valid_to?: string;
+  season_ids?: number[];         // Applicable à certaines saisons seulement (inclusion)
+  excluded_season_ids?: number[]; // Exclure certaines saisons (ex: Noël, Haute saison)
+  is_cumulative: boolean;        // Cumulable avec autres réductions?
+  priority: number;              // Priorité si plusieurs réductions
+  is_active: boolean;
+}
+
+export interface CreateEarlyBirdDiscountDTO {
+  accommodation_id: number;
+  name: string;
+  days_in_advance: number;
+  discount_percent: number;
+  discount_amount?: number;
+  discount_currency?: string;
+  valid_from?: string;
+  valid_to?: string;
+  season_ids?: number[];
+  excluded_season_ids?: number[]; // Exclure certaines saisons (ex: Noël)
+  is_cumulative?: boolean;
+  priority?: number;
+}
+
+export interface UpdateEarlyBirdDiscountDTO extends Partial<Omit<CreateEarlyBirdDiscountDTO, 'accommodation_id'>> {
+  is_active?: boolean;
+}
+
+// ============================================================================
+// Accommodation Extras (Optional Supplements)
+// ============================================================================
+
+/**
+ * Type de supplément optionnel
+ */
+export type ExtraType = 'meal' | 'transfer' | 'activity' | 'service' | 'other';
+
+export const EXTRA_TYPE_LABELS: Record<ExtraType, string> = {
+  meal: 'Repas',
+  transfer: 'Transfert',
+  activity: 'Activité',
+  service: 'Service',
+  other: 'Autre',
+};
+
+/**
+ * Modèle de tarification pour les extras
+ */
+export type ExtraPricingModel =
+  | 'per_person_per_night'  // Par personne par nuit (ex: petit-déjeuner)
+  | 'per_room_per_night'    // Par chambre par nuit (ex: parking)
+  | 'per_person'            // Par personne (ex: transfert aller simple)
+  | 'per_unit'              // Par unité (ex: transfert A/R, spa)
+  | 'flat';                 // Forfait unique (ex: late checkout)
+
+export const PRICING_MODEL_LABELS: Record<ExtraPricingModel, string> = {
+  per_person_per_night: 'Par personne / nuit',
+  per_room_per_night: 'Par chambre / nuit',
+  per_person: 'Par personne',
+  per_unit: 'Par unité',
+  flat: 'Forfait unique',
+};
+
+/**
+ * Supplément optionnel pour un hébergement
+ * Ex: Petit-déjeuner, Transfert aéroport, Accès spa, etc.
+ */
+export interface AccommodationExtra {
+  id: number;
+  accommodation_id: number;
+  name: string;                    // "Petit-déjeuner", "Transfert aéroport"
+  code?: string;                   // "BRK", "TRF"
+  description?: string;
+  extra_type: ExtraType;           // meal, transfer, activity, service, other
+  unit_cost: number;               // Prix unitaire
+  currency: string;                // EUR, THB, USD...
+  pricing_model: ExtraPricingModel; // Comment calculer le coût total
+  season_id?: number;              // Optionnel: tarif saisonnier
+  valid_from?: string;             // Période de validité
+  valid_to?: string;
+  is_included: boolean;            // Inclus dans le tarif de base?
+  is_mandatory: boolean;           // Obligatoire pour toute réservation?
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface CreateAccommodationExtraDTO {
+  name: string;
+  code?: string;
+  description?: string;
+  extra_type?: ExtraType;
+  unit_cost: number;
+  currency?: string;
+  pricing_model?: ExtraPricingModel;
+  season_id?: number;
+  valid_from?: string;
+  valid_to?: string;
+  is_included?: boolean;
+  is_mandatory?: boolean;
+  sort_order?: number;
+}
+
+export interface UpdateAccommodationExtraDTO extends Partial<CreateAccommodationExtraDTO> {
+  is_active?: boolean;
+}
+
 // ============================================================================
 // Accommodation DTOs
 // ============================================================================
@@ -1977,15 +2393,24 @@ export interface CreateAccommodationDTO {
   name: string;
   description?: string;
   star_rating?: number;
+  internal_priority?: number;    // Priorité interne (1=primaire, 2=secondaire, etc.)
+  internal_notes?: string;       // Notes internes pour les vendeurs
   location_id?: number;
   address?: string;
+  city?: string;
+  country_code?: string;
   lat?: number;
   lng?: number;
+  google_place_id?: string;
   check_in_time?: string;
   check_out_time?: string;
   amenities?: string[];
   reservation_email?: string;
   reservation_phone?: string;
+  website_url?: string;
+  // Entité de facturation (pour la logistique)
+  billing_entity_name?: string;
+  billing_entity_note?: string;
   external_provider?: 'ratehawk' | 'hotelbeds' | 'amadeus' | 'manual';
   external_id?: string;
 }
@@ -2019,10 +2444,11 @@ export interface CreateAccommodationSeasonDTO {
   name: string;
   code?: string;
   season_type: SeasonType;
+  season_level?: SeasonLevel;  // low, high (default reference), peak
   start_date?: string;
   end_date?: string;
   weekdays?: number[];
-  year?: number;
+  year?: string | null;  // Can be "2024" or "2024-2025" for ranges
   priority?: number;
 }
 
@@ -2102,4 +2528,370 @@ export interface AvailableRoom {
   contract_rate?: number;        // Notre tarif au contrat
   rate_difference?: number;      // Différence (+ = plus cher que contrat)
   rate_difference_pct?: number;
+}
+
+// ============================================================================
+// Content Article System - Fiches descriptives multilingues
+// ============================================================================
+
+/**
+ * Types de contenu disponibles
+ */
+export type ContentEntityType =
+  | 'attraction'     // Point d'intérêt, monument, site
+  | 'destination'    // Ville, village
+  | 'activity'       // Activité (randonnée, cours de cuisine, etc.)
+  | 'accommodation'  // Hébergement (lié au système fournisseurs)
+  | 'eating'         // Restaurant, café
+  | 'region';        // Région géographique
+
+/**
+ * Statut de publication du contenu
+ */
+export type ContentStatus =
+  | 'draft'          // En cours de rédaction
+  | 'review'         // En attente de validation
+  | 'published'      // Publié sur le site
+  | 'archived';      // Archivé (conservé mais masqué)
+
+/**
+ * Types de relations entre entités de contenu
+ */
+export type ContentRelationType =
+  | 'part_of'        // L'attraction fait partie de la destination
+  | 'near'           // À proximité
+  | 'related'        // Contenu associé
+  | 'see_also'       // Voir aussi
+  | 'includes';      // La région inclut des destinations
+
+/**
+ * Statut de génération IA
+ */
+export type AIGenerationStatus =
+  | 'pending'        // En attente
+  | 'in_progress'    // En cours
+  | 'completed'      // Terminé
+  | 'failed'         // Échec
+  | 'reviewed';      // Validé par un humain
+
+/**
+ * Langues supportées pour le contenu
+ */
+export type SupportedLanguage = 'fr' | 'en' | 'it' | 'es' | 'de';
+
+/**
+ * Entité de contenu principale
+ */
+export interface ContentEntity {
+  id: string;                    // UUID
+  tenant_id: string;
+  entity_type: ContentEntityType;
+  status: ContentStatus;
+
+  // Location géographique
+  location_id?: number;
+  location?: Location;           // Relation populée
+  lat?: number;
+  lng?: number;
+  google_place_id?: string;
+  address?: string;
+
+  // Hiérarchie
+  parent_id?: string;            // UUID de l'entité parente
+  parent?: ContentEntity;        // Relation populée
+  children?: ContentEntity[];    // Enfants
+
+  // Entités liées (cross-references)
+  supplier_id?: number;          // Pour accommodation/eating
+  accommodation_id?: number;     // Lien vers Accommodation
+
+  // Notation
+  rating?: number;               // 0.0 à 5.0
+  rating_count: number;
+  internal_priority: number;     // Pour le tri (1 = top)
+
+  // SEO
+  canonical_url?: string;
+  meta_robots: string;
+  structured_data_json?: Record<string, unknown>;
+
+  // Image de couverture
+  cover_image_url?: string;
+  cover_image_alt?: string;
+
+  // IA
+  ai_generation_status?: AIGenerationStatus;
+  ai_generated_at?: string;
+  ai_model_used?: string;
+
+  // Flags
+  is_featured: boolean;
+  view_count: number;
+
+  // Relations
+  translations?: ContentTranslation[];
+  photos?: ContentPhoto[];
+  tags?: ContentTag[];
+  relations?: ContentRelation[];
+
+  // Meta
+  created_by?: string;
+  updated_by?: string;
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Traduction d'une entité de contenu (par langue)
+ */
+export interface ContentTranslation {
+  id: string;                    // UUID
+  entity_id: string;
+  language_code: SupportedLanguage;
+
+  // SEO - champs critiques
+  title: string;
+  slug: string;                  // URL-friendly, unique par tenant+langue
+  meta_title?: string;           // Max 60 chars
+  meta_description?: string;     // Max 160 chars
+
+  // Contenu
+  excerpt?: string;              // 150-200 chars pour les cards
+  content_markdown?: string;     // Contenu complet en Markdown
+  content_html?: string;         // HTML rendu (cache)
+
+  // IA
+  ai_generation_status?: AIGenerationStatus;
+  ai_generated_at?: string;
+  ai_reviewed_by?: string;
+  ai_reviewed_at?: string;
+
+  // Flags
+  is_primary: boolean;           // Langue principale de l'entité
+  word_count?: number;
+  reading_time_minutes?: number;
+
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Photo associée à une entité de contenu
+ */
+export interface ContentPhoto {
+  id: string;                    // UUID
+  entity_id: string;
+  url: string;
+  thumbnail_url?: string;
+  storage_path?: string;
+
+  // Variants optimisés
+  url_avif?: string;
+  url_webp?: string;
+  url_medium?: string;           // 800px
+  url_large?: string;            // 1920px
+  srcset_json?: Record<string, string>;
+  lqip_data_url?: string;        // Base64 blur placeholder
+
+  // Metadata
+  original_filename?: string;
+  file_size?: number;
+  width?: number;
+  height?: number;
+
+  // Multilingue
+  caption_json?: Record<SupportedLanguage, string>;
+  alt_text_json?: Record<SupportedLanguage, string>;
+
+  // Flags
+  is_cover: boolean;
+  is_processed: boolean;
+  sort_order: number;
+
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * Tag de contenu avec traductions
+ */
+export interface ContentTag {
+  id: string;                    // UUID
+  tenant_id: string;
+  slug: string;
+  parent_id?: string;            // Pour tags hiérarchiques
+  color?: string;                // Couleur hex pour UI
+  icon?: string;                 // Nom d'icône lucide-react
+  sort_order: number;
+  is_active: boolean;
+
+  // Traductions des labels
+  labels: Record<SupportedLanguage, string>;
+  descriptions?: Record<SupportedLanguage, string>;
+
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * Relation entre deux entités de contenu
+ */
+export interface ContentRelation {
+  id: string;                    // UUID
+  source_entity_id: string;
+  target_entity_id: string;
+  relation_type: ContentRelationType;
+  sort_order: number;
+  is_bidirectional: boolean;
+
+  // Entité cible populée
+  target?: ContentEntity;
+
+  created_at?: string;
+}
+
+// ============================================================================
+// Content DTOs
+// ============================================================================
+
+/**
+ * DTO pour créer une entité de contenu
+ */
+export interface CreateContentEntityDTO {
+  entity_type: ContentEntityType;
+  location_id?: number;
+  lat?: number;
+  lng?: number;
+  google_place_id?: string;
+  address?: string;
+  parent_id?: string;
+  supplier_id?: number;
+  accommodation_id?: number;
+  rating?: number;
+  is_featured?: boolean;
+
+  // Traduction initiale (obligatoire)
+  initial_translation: {
+    language_code: SupportedLanguage;
+    title: string;
+    slug?: string;               // Auto-généré si non fourni
+    excerpt?: string;
+    content_markdown?: string;
+  };
+
+  // Tags optionnels
+  tag_ids?: string[];
+}
+
+/**
+ * DTO pour mettre à jour une entité de contenu
+ */
+export interface UpdateContentEntityDTO {
+  status?: ContentStatus;
+  location_id?: number;
+  lat?: number;
+  lng?: number;
+  google_place_id?: string;
+  address?: string;
+  parent_id?: string;
+  supplier_id?: number;
+  accommodation_id?: number;
+  rating?: number;
+  is_featured?: boolean;
+  cover_image_url?: string;
+  cover_image_alt?: string;
+  canonical_url?: string;
+  meta_robots?: string;
+}
+
+/**
+ * DTO pour créer une traduction
+ */
+export interface CreateContentTranslationDTO {
+  entity_id: string;
+  language_code: SupportedLanguage;
+  title: string;
+  slug?: string;
+  meta_title?: string;
+  meta_description?: string;
+  excerpt?: string;
+  content_markdown?: string;
+  is_primary?: boolean;
+}
+
+/**
+ * DTO pour mettre à jour une traduction
+ */
+export interface UpdateContentTranslationDTO {
+  title?: string;
+  slug?: string;
+  meta_title?: string;
+  meta_description?: string;
+  excerpt?: string;
+  content_markdown?: string;
+  is_primary?: boolean;
+}
+
+/**
+ * DTO pour la génération IA de contenu
+ */
+export interface AIGenerateContentDTO {
+  entity_id: string;
+  language_codes: SupportedLanguage[];
+  prompt_context?: {
+    tone?: 'marketing' | 'informative' | 'adventure' | 'luxury' | 'family';
+    target_audience?: string;
+    key_points?: string[];
+    word_count_target?: number;
+  };
+  regenerate_existing?: boolean;
+}
+
+/**
+ * Résultat de génération IA
+ */
+export interface AIGenerationResult {
+  entity_id: string;
+  language_code: SupportedLanguage;
+  status: 'success' | 'failed';
+  generated_content?: {
+    title: string;
+    meta_title: string;
+    meta_description: string;
+    excerpt: string;
+    content_markdown: string;
+  };
+  error?: string;
+  tokens_used?: number;
+}
+
+/**
+ * Filtres pour rechercher des entités de contenu
+ */
+export interface ContentEntityFilters {
+  entity_type?: ContentEntityType;
+  status?: ContentStatus;
+  language_code?: SupportedLanguage;
+  location_id?: number;
+  parent_id?: string;
+  tag_ids?: string[];
+  is_featured?: boolean;
+  has_ai_content?: boolean;
+  search?: string;
+  page?: number;
+  page_size?: number;
+  sort_by?: 'created_at' | 'updated_at' | 'title' | 'rating' | 'view_count';
+  sort_order?: 'asc' | 'desc';
+}
+
+/**
+ * Réponse paginée générique
+ */
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 }

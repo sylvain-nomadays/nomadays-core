@@ -1,11 +1,16 @@
 /**
  * API Client for FastAPI backend
  * Handles authentication with Supabase JWT tokens
+ *
+ * Uses Next.js rewrites to proxy /api/* requests to the backend.
+ * This avoids CORS issues and browser blocking.
  */
 
 import { createClient } from '@/lib/supabase/client';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Use relative URL to go through Next.js proxy (configured in next.config.ts)
+// The proxy rewrites /api/* to http://localhost:8000/*
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface ApiError {
   detail: string;
@@ -63,9 +68,15 @@ class ApiClient {
     if (typeof window !== 'undefined') {
       try {
         const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) {
+          console.error('[apiClient.getToken] Supabase error:', error);
+          return null;
+        }
+        console.log('[apiClient.getToken] Session:', session ? 'found' : 'not found');
         return session?.access_token ?? null;
-      } catch {
+      } catch (err) {
+        console.error('[apiClient.getToken] Exception:', err);
         return null;
       }
     }
@@ -77,7 +88,10 @@ class ApiClient {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
+    // Ensure endpoint starts with /api for the Next.js proxy
+    // Skip if endpoint already starts with /api
+    const normalizedEndpoint = endpoint.startsWith('/api') ? endpoint : `/api${endpoint}`;
+    const url = `${this.baseUrl}${normalizedEndpoint}`;
 
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
@@ -86,20 +100,31 @@ class ApiClient {
 
     // Get token and add to headers
     const token = await this.getToken();
-    console.log('[apiClient] Token for request:', {
+    console.log('[apiClient] Request:', {
+      url,
+      method: options.method || 'GET',
       hasToken: !!token,
       tokenPreview: token ? token.substring(0, 20) + '...' : null,
-      staticToken: !!this.token,
-      endpoint
     });
     if (token) {
       (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...options,
+        headers,
+      });
+    } catch (networkError) {
+      // Network error - fetch failed entirely (no response)
+      console.error('[apiClient] Network error:', networkError);
+      const error: ApiError = {
+        detail: `Impossible de contacter le serveur (${this.baseUrl}). Vérifiez que le backend est démarré.`,
+        status: 0,
+      };
+      throw error;
+    }
 
     if (!response.ok) {
       const error: ApiError = {
@@ -169,22 +194,35 @@ class ApiClient {
 
   // UPLOAD request (for file uploads with FormData)
   async upload<T>(endpoint: string, formData: FormData): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
+    // Ensure endpoint starts with /api for the Next.js proxy
+    const normalizedEndpoint = endpoint.startsWith('/api') ? endpoint : `/api${endpoint}`;
+    const url = `${this.baseUrl}${normalizedEndpoint}`;
 
     const headers: Record<string, string> = {};
 
     // Get token and add to headers
     const token = await this.getToken();
+    console.log('[apiClient.upload] Token:', token ? 'present' : 'missing');
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    console.log('[apiClient.upload] Uploading to:', url);
+    console.log('[apiClient.upload] FormData entries:', [...formData.entries()].map(e => `${e[0]}: ${e[1] instanceof File ? `File(${e[1].name}, ${e[1].size} bytes)` : e[1]}`));
+
     // Note: Don't set Content-Type for FormData - browser will set it with boundary
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
+    // Use AbortController for timeout (5 minutes for large PDFs + AI processing)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: formData,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
 
     if (!response.ok) {
       const error: ApiError = {
@@ -208,6 +246,13 @@ class ApiClient {
     }
 
     return response.json();
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('La requête a expiré (timeout). Le traitement IA peut prendre du temps pour les gros fichiers.');
+      }
+      throw err;
+    }
   }
 }
 

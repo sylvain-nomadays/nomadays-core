@@ -14,7 +14,7 @@ import {
   useCalculateRoutes,
 } from '@/hooks/useTripLocations';
 import { LocationAutocomplete } from './LocationAutocomplete';
-import type { TripLocation, TripRoute, PlaceAutocompleteResult, LocationType } from '@/lib/api/types';
+import type { TripLocation, TripRoute, PlaceAutocompleteResult, TripLocationType } from '@/lib/api/types';
 
 interface TripMapEditorProps {
   tripId: number;
@@ -23,14 +23,14 @@ interface TripMapEditorProps {
 }
 
 // Map marker colors by type
-const MARKER_COLORS: Record<LocationType, string> = {
+const MARKER_COLORS: Record<TripLocationType, string> = {
   overnight: '#10b981', // emerald-500
   waypoint: '#3b82f6', // blue-500
   poi: '#f59e0b', // amber-500
   activity: '#8b5cf6', // violet-500
 };
 
-const LOCATION_TYPE_LABELS: Record<LocationType, string> = {
+const LOCATION_TYPE_LABELS: Record<TripLocationType, string> = {
   overnight: 'Nuit',
   waypoint: 'Étape',
   poi: 'Point d\'intérêt',
@@ -47,7 +47,7 @@ export function TripMapEditor({
   destinationCountries,
   className,
 }: TripMapEditorProps) {
-  const [selectedLocationType, setSelectedLocationType] = useState<LocationType>('overnight');
+  const [selectedLocationType, setSelectedLocationType] = useState<TripLocationType>('overnight');
   const [selectedDayNumber, setSelectedDayNumber] = useState<number | undefined>(undefined);
 
   // API hooks
@@ -144,7 +144,7 @@ export function TripMapEditor({
 
           {/* Location type selector */}
           <div className="flex gap-2 flex-wrap">
-            {(Object.keys(LOCATION_TYPE_LABELS) as LocationType[]).map((type) => (
+            {(Object.keys(LOCATION_TYPE_LABELS) as TripLocationType[]).map((type) => (
               <button
                 key={type}
                 type="button"

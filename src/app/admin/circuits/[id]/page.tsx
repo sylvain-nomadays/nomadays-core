@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -8,6 +8,7 @@ import {
   Save,
   Calculator,
   Plus,
+  Minus,
   Trash2,
   ChevronDown,
   ChevronUp,
@@ -36,23 +37,49 @@ import {
   Mountain,
   RefreshCw,
   Info,
+  Layers,
+  Coffee,
+  UtensilsCrossed,
+  Soup,
 } from 'lucide-react';
-import { useTrip, useUpdateTrip } from '@/hooks/useTrips';
+import { useTrip, useUpdateTrip, useTripPhotos, useRegenerateTripPhoto, useUploadTripPhoto, useCreateTripDay, useUpdateTripDay, useDeleteTripDay, useExtendTripDay, useReorderDays } from '@/hooks/useTrips';
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { DayBlockList } from '@/components/circuits/blocks/DayBlockList';
+import type { AccommodationInfo, LinkedAccommodation } from '@/components/circuits/blocks/DayBlockList';
+import { LocationSelector } from '@/components/suppliers/LocationSelector';
+import { CircuitDndProvider, DroppableDayCard, SourcePanel } from '@/components/circuits/dnd';
+import { useMoveBlock, useDuplicateBlock, useCopyDayBlocks, useReorderBlocks } from '@/hooks/useBlocks';
+import { formatTripDayLabel, getDayBadge } from '@/lib/formatTripDate';
+import OptimizedImage from '@/components/common/OptimizedImage';
 import { useLanguages, useTripTranslations, useTranslateTrip, useTranslationPreview, usePushTranslation } from '@/hooks/useTranslation';
 import { useTravelThemes } from '@/hooks/useTravelThemes';
+import { useCostNatures } from '@/hooks/useCostNatures';
 import { LanguageSelector, StaleWarningBanner, PreviewModeIndicator } from '@/components/circuits/LanguageSelector';
 import { TranslationVersionsNav } from '@/components/circuits/TranslationVersionsNav';
 import { ThemeCheckboxGrid } from '@/components/ui/theme-checkbox-grid';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import type { Trip, TripDay, Formula, QuotationResult, TripHighlight, InclusionItem, DescriptionTone, CostNature, Item, PaxConfig } from '@/lib/api/types';
 import {
   TripMapEditor,
   TripPresentationEditor,
   InclusionExclusionEditor,
   TripInfoEditor,
+  HeroPhotoEditor,
   CostBreakdown,
   PriceGrid,
   ItemEditor,
+  EarlyBirdAlerts,
+  TransversalServicesPanel,
+  ConditionsPanel,
 } from '@/components/circuits';
+import { useEarlyBirdAlerts } from '@/hooks/useEarlyBirdAlerts';
 import { TRIP_STATUS, getStatusConfig, TONE_OPTIONS } from '@/lib/constants/circuits';
 import { getCountryFlag, getCountryName } from '@/lib/constants/countries';
 
@@ -63,7 +90,7 @@ const defaultPaxConfigs: { pax: number; rooms: number }[] = [
   { pax: 6, rooms: 3 },
 ];
 
-type TabType = 'presentation' | 'program' | 'quotation' | 'settings';
+type TabType = 'presentation' | 'program' | 'quotation';
 
 export default function CircuitDetailPage() {
   const params = useParams();
@@ -71,11 +98,86 @@ export default function CircuitDetailPage() {
   const tripId = params.id as string;
 
   const { data: trip, loading, error, refetch } = useTrip(tripId);
+  const { data: tripPhotos, refetch: refetchPhotos } = useTripPhotos(tripId);
   const { mutate: updateTrip, loading: saving } = useUpdateTrip();
+  const { mutate: regeneratePhoto, loading: regenerating } = useRegenerateTripPhoto();
+  const { mutate: createTripDay } = useCreateTripDay();
+  const { mutate: updateTripDay } = useUpdateTripDay();
+  const { mutate: extendTripDay } = useExtendTripDay();
+  const { mutate: moveBlock } = useMoveBlock();
+  const { mutate: duplicateBlock } = useDuplicateBlock();
+  const { mutate: copyDayBlocks } = useCopyDayBlocks();
+  const { mutate: reorderBlocks } = useReorderBlocks();
+  const { mutate: reorderDays } = useReorderDays();
+
+  // DnD: track block IDs per day for reorder calculations
+  const dayBlocksMapRef = useRef<Map<number, number[]>>(new Map());
+  const handleBlocksLoaded = useCallback((dayId: number, blockIds: number[]) => {
+    dayBlocksMapRef.current.set(dayId, blockIds);
+  }, []);
+
+  // Multi-night accommodation: track accommodation info per day number
+  const [accommodationInfoMap, setAccommodationInfoMap] = useState<Map<number, AccommodationInfo>>(new Map());
+  const handleAccommodationLoaded = useCallback((dayNumber: number, info: AccommodationInfo | null) => {
+    setAccommodationInfoMap(prev => {
+      const next = new Map(prev);
+      if (info) {
+        next.set(dayNumber, info);
+      } else {
+        next.delete(dayNumber);
+      }
+      return next;
+    });
+  }, []);
+
+  // Activity meals: track which meals are included from activity blocks per day
+  const [activityMealsMap, setActivityMealsMap] = useState<Map<number, { breakfast: boolean; lunch: boolean; dinner: boolean }>>(new Map());
+  const handleActivityMealsChanged = useCallback((dayNumber: number, meals: { breakfast: boolean; lunch: boolean; dinner: boolean }) => {
+    setActivityMealsMap(prev => {
+      const next = new Map(prev);
+      if (meals.breakfast || meals.lunch || meals.dinner) {
+        next.set(dayNumber, meals);
+      } else {
+        next.delete(dayNumber);
+      }
+      return next;
+    });
+  }, []);
+
+  /**
+   * For a given dayNumber, find if a previous day has a multi-night accommodation
+   * that covers this day. Returns LinkedAccommodation or undefined.
+   */
+  const getLinkedAccommodation = useCallback((dayNumber: number): LinkedAccommodation | undefined => {
+    // Check all days before this one for multi-night accommodations
+    for (const [sourceDayNum, info] of accommodationInfoMap.entries()) {
+      if (sourceDayNum >= dayNumber) continue; // Only look at previous days
+      // Accommodation at sourceDayNum covers nights: sourceDayNum, sourceDayNum+1, ..., sourceDayNum+nights-1
+      const lastNight = sourceDayNum + info.nights - 1;
+      if (dayNumber <= lastNight) {
+        return {
+          hotelName: info.hotelName,
+          nightNumber: dayNumber - sourceDayNum + 1,
+          totalNights: info.nights,
+          sourceDayNumber: sourceDayNum,
+          breakfastIncluded: info.breakfastIncluded,
+          lunchIncluded: info.lunchIncluded,
+          dinnerIncluded: info.dinnerIncluded,
+        };
+      }
+    }
+    return undefined;
+  }, [accommodationInfoMap]);
 
   const [activeTab, setActiveTab] = useState<TabType>('presentation');
+  const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  // Regenerate photo dialog state
+  const [regenerateDialogOpen, setRegenerateDialogOpen] = useState(false);
+  const [regeneratePhotoId, setRegeneratePhotoId] = useState<number | null>(null);
+  const [regeneratePrompt, setRegeneratePrompt] = useState('');
+  const [regenerateDayNumber, setRegenerateDayNumber] = useState<number | null>(null);
   const [selectedFormula, setSelectedFormula] = useState<number | null>(null);
-  const [expandedDays, setExpandedDays] = useState<number[]>([1, 2, 3]);
+  const [expandedDays, setExpandedDays] = useState<number[]>([]);
   const [selectedPax, setSelectedPax] = useState(2);
   const [quotationResult, setQuotationResult] = useState<QuotationResult | null>(null);
   const [selectedCostNature, setSelectedCostNature] = useState<string>('HTL');
@@ -146,21 +248,20 @@ export default function CircuitDetailPage() {
 
   // Travel themes
   const { themes: availableThemes, isLoading: themesLoading } = useTravelThemes();
+
+  // Cost natures (from API, with fallback to defaults)
+  const { costNatures } = useCostNatures();
+
+
   const [selectedThemeIds, setSelectedThemeIds] = useState<number[]>([]);
 
   // Item editor state
   const [showItemEditor, setShowItemEditor] = useState(false);
   const [editingItem, setEditingItem] = useState<Partial<Item> | undefined>(undefined);
+  const [pricingExpanded, setPricingExpanded] = useState(false);
+  const [conditionsVersion, setConditionsVersion] = useState(0);
 
-  // Default cost natures (TODO: fetch from API)
-  const defaultCostNatures: CostNature[] = [
-    { id: 1, code: 'HTL', name: 'Hébergement' },
-    { id: 2, code: 'GDE', name: 'Guide' },
-    { id: 3, code: 'TRS', name: 'Transport' },
-    { id: 4, code: 'ACT', name: 'Activités' },
-    { id: 5, code: 'RES', name: 'Restauration' },
-    { id: 6, code: 'MIS', name: 'Divers' },
-  ];
+  // Cost natures are now fetched via useCostNatures() hook above
 
   // Initialise les données de présentation depuis le trip
   useEffect(() => {
@@ -206,6 +307,11 @@ export default function CircuitDetailPage() {
       // Travel themes
       if (trip.themes && trip.themes.length > 0) {
         setSelectedThemeIds(trip.themes.map(t => t.id));
+      }
+
+      // Expand all days by default
+      if (trip.days && trip.days.length > 0) {
+        setExpandedDays(trip.days.map(d => d.day_number));
       }
 
       // Sélectionner la première formule par défaut
@@ -348,6 +454,13 @@ export default function CircuitDetailPage() {
     }
   };
 
+  // Early Bird alerts — hooks must be called before any early return
+  const currentFormulaForHooks = trip?.formulas?.find(f => f.id === selectedFormula);
+  const allItems = useMemo(() => {
+    return currentFormulaForHooks?.items || [];
+  }, [currentFormulaForHooks]);
+  const { accommodations: earlyBirdAccommodations, loading: loadingEarlyBird } = useEarlyBirdAlerts(allItems);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -438,6 +551,22 @@ export default function CircuitDetailPage() {
                     {getCountryName(trip.destination_country)}
                   </span>
                 )}
+                {/* Comfort level */}
+                {settingsData.comfort_level > 0 && (
+                  <span className="flex items-center gap-0.5" title={`Confort ${settingsData.comfort_level}/5`}>
+                    {[1, 2, 3, 4, 5].map(i => (
+                      <Star key={i} className={`w-3.5 h-3.5 ${i <= settingsData.comfort_level ? 'fill-amber-400 text-amber-400' : 'text-gray-300'}`} />
+                    ))}
+                  </span>
+                )}
+                {/* Difficulty level */}
+                {settingsData.difficulty_level > 0 && (
+                  <span className="flex items-center gap-0.5" title={`Difficulté ${settingsData.difficulty_level}/5`}>
+                    {[1, 2, 3, 4, 5].map(i => (
+                      <Mountain key={i} className={`w-3.5 h-3.5 ${i <= settingsData.difficulty_level ? 'fill-orange-400 text-orange-400' : 'text-gray-300'}`} />
+                    ))}
+                  </span>
+                )}
                 {trip.client_name && (
                   <span className="flex items-center gap-1">
                     <Users className="w-4 h-4" />
@@ -491,6 +620,18 @@ export default function CircuitDetailPage() {
         </div>
       </div>
 
+      {/* Early Bird Alerts */}
+      {trip.start_date && currentFormula?.items && currentFormula.items.length > 0 && earlyBirdAccommodations.size > 0 && (
+        <div className="mb-6">
+          <EarlyBirdAlerts
+            tripStartDate={trip.start_date}
+            items={currentFormula.items}
+            accommodations={earlyBirdAccommodations}
+            compact={false}
+          />
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-6">
         <nav className="flex gap-8">
@@ -498,7 +639,6 @@ export default function CircuitDetailPage() {
             { id: 'presentation', label: 'Présentation', icon: FileText },
             { id: 'program', label: 'Programme', icon: Calendar },
             { id: 'quotation', label: 'Cotation', icon: Calculator },
-            { id: 'settings', label: 'Paramètres', icon: Settings },
           ].map(tab => (
             <button
               key={tab.id}
@@ -555,11 +695,194 @@ export default function CircuitDetailPage() {
       {/* Content */}
       {activeTab === 'presentation' && (
         <div className="space-y-6">
-          {/* Map */}
-          <TripMapEditor
+          {/* Hero Photo */}
+          <HeroPhotoEditor
             tripId={trip.id}
-            destinationCountries={trip.destination_countries || (trip.destination_country ? [trip.destination_country] : [])}
+            heroPhoto={tripPhotos?.find(p => p.is_hero) || null}
+            destinationCountry={trip.destination_country}
+            descriptionShort={presentationData.description_short}
+            onPhotoChanged={refetchPhotos}
           />
+
+          {/* Caractéristiques du voyage */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+            <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
+              <Star className="w-4 h-4 text-amber-500" />
+              Caractéristiques du voyage
+            </h3>
+            <div className="grid grid-cols-2 gap-6">
+              {/* Nom du circuit */}
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Nom du circuit
+                </label>
+                <input
+                  type="text"
+                  value={settingsData.name}
+                  onChange={(e) => setSettingsData(prev => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-4 col-span-2">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Durée (jours)
+                  </label>
+                  <input
+                    type="number"
+                    value={settingsData.duration_days}
+                    onChange={(e) => setSettingsData(prev => ({ ...prev, duration_days: parseInt(e.target.value) || 0 }))}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Pays de destination
+                  </label>
+                  <select
+                    value={settingsData.destination_country}
+                    onChange={(e) => setSettingsData(prev => ({ ...prev, destination_country: e.target.value }))}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                  >
+                    <option value="">Sélectionner...</option>
+                    <option value="TH">🇹🇭 Thaïlande</option>
+                    <option value="VN">🇻🇳 Vietnam</option>
+                    <option value="JP">🇯🇵 Japon</option>
+                    <option value="ID">🇮🇩 Indonésie</option>
+                    <option value="MY">🇲🇾 Malaisie</option>
+                    <option value="KH">🇰🇭 Cambodge</option>
+                    <option value="LA">🇱🇦 Laos</option>
+                    <option value="MM">🇲🇲 Myanmar</option>
+                    <option value="PH">🇵🇭 Philippines</option>
+                    <option value="CN">🇨🇳 Chine</option>
+                    <option value="IN">🇮🇳 Inde</option>
+                    <option value="NP">🇳🇵 Népal</option>
+                    <option value="LK">🇱🇰 Sri Lanka</option>
+                    <option value="MA">🇲🇦 Maroc</option>
+                  </select>
+                </div>
+                {(trip.type === 'custom' || trip.type === 'gir' || trip.client_name) && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Date de départ
+                    </label>
+                    <input
+                      type="date"
+                      value={settingsData.start_date}
+                      onChange={(e) => setSettingsData(prev => ({ ...prev, start_date: e.target.value }))}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Confort */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-2">
+                  Niveau de confort
+                </label>
+                <div className="flex items-center gap-1">
+                  {[1, 2, 3, 4, 5].map((level) => (
+                    <button
+                      key={level}
+                      onClick={() => setSettingsData(prev => ({ ...prev, comfort_level: level }))}
+                      className="p-1 transition-colors"
+                    >
+                      <Star
+                        className={`w-6 h-6 ${
+                          level <= settingsData.comfort_level
+                            ? 'fill-amber-400 text-amber-400'
+                            : 'text-gray-300'
+                        }`}
+                      />
+                    </button>
+                  ))}
+                  <span className="ml-2 text-sm text-gray-500">
+                    {settingsData.comfort_level}/5
+                  </span>
+                </div>
+              </div>
+
+              {/* Difficulté */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-2">
+                  Niveau de difficulté
+                </label>
+                <div className="flex items-center gap-1">
+                  {[1, 2, 3, 4, 5].map((level) => (
+                    <button
+                      key={level}
+                      onClick={() => setSettingsData(prev => ({ ...prev, difficulty_level: level }))}
+                      className="p-1 transition-colors"
+                    >
+                      <Mountain
+                        className={`w-6 h-6 ${
+                          level <= settingsData.difficulty_level
+                            ? 'fill-orange-400 text-orange-400'
+                            : 'text-gray-300'
+                        }`}
+                      />
+                    </button>
+                  ))}
+                  <span className="ml-2 text-sm text-gray-500">
+                    {settingsData.difficulty_level}/5
+                  </span>
+                </div>
+              </div>
+
+              {/* Client (si custom/gir) */}
+              {(trip.type === 'custom' || trip.client_name) && (
+                <div className="col-span-2 grid grid-cols-2 gap-4 pt-4 border-t border-gray-100">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Nom du client
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsData.client_name}
+                      onChange={(e) => setSettingsData(prev => ({ ...prev, client_name: e.target.value }))}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Email client
+                    </label>
+                    <input
+                      type="email"
+                      value={settingsData.client_email}
+                      onChange={(e) => setSettingsData(prev => ({ ...prev, client_email: e.target.value }))}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Thématiques de voyage */}
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <label className="block text-xs font-medium text-gray-500 mb-3">
+                Thématiques de voyage
+              </label>
+              {themesLoading ? (
+                <div className="flex items-center gap-2 text-gray-500">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Chargement des thématiques...</span>
+                </div>
+              ) : availableThemes && availableThemes.length > 0 ? (
+                <ThemeCheckboxGrid
+                  themes={availableThemes}
+                  selectedIds={selectedThemeIds}
+                  onChange={setSelectedThemeIds}
+                />
+              ) : (
+                <p className="text-sm text-gray-500">
+                  Aucune thématique disponible. Configurez-les dans les paramètres.
+                </p>
+              )}
+            </div>
+          </div>
 
           {/* Presentation */}
           <TripPresentationEditor
@@ -593,6 +916,12 @@ export default function CircuitDetailPage() {
             }}
           />
 
+          {/* Map */}
+          <TripMapEditor
+            tripId={trip.id}
+            destinationCountries={trip.destination_countries || (trip.destination_country ? [trip.destination_country] : [])}
+          />
+
           {/* Additional Info */}
           <TripInfoEditor
             data={tripInfo}
@@ -612,55 +941,370 @@ export default function CircuitDetailPage() {
       )}
 
       {activeTab === 'program' && (
-        <div className="space-y-4">
+        <CircuitDndProvider
+          onMoveBlock={async (formulaId, targetDayId) => {
+            await moveBlock({ formulaId, targetDayId });
+            refetch();
+          }}
+          onReorderBlocks={async (dayId, blockIds) => {
+            await reorderBlocks({ dayId, blockIds });
+            refetch();
+          }}
+          onReorderDays={async (dayIds) => {
+            await reorderDays({ tripId: trip.id, dayIds });
+            refetch();
+          }}
+          onDuplicateBlock={async (formulaId, targetDayId) => {
+            await duplicateBlock({ formulaId, targetDayId });
+            refetch();
+          }}
+          onCopyDayBlocks={async (sourceDayId, targetDayId) => {
+            await copyDayBlocks({ sourceDayId, targetDayId });
+            refetch();
+          }}
+          dayBlocksMap={dayBlocksMapRef.current}
+          dayIds={(trip.days || []).map(d => d.id)}
+        >
+        <div className="flex gap-4">
+        <div className="flex-1 min-w-0 space-y-4">
+          {/* Transversal services panel — above day-by-day */}
+          <TransversalServicesPanel
+            tripId={trip.id}
+            totalDays={trip.duration_days || trip.days?.length || 1}
+            costNatures={costNatures}
+            onRefetch={refetch}
+            conditionsVersion={conditionsVersion}
+          />
+
+          {/* Conditions panel — manage trip-level conditions */}
+          <ConditionsPanel
+            tripId={trip.id}
+            onConditionsChanged={() => setConditionsVersion(v => v + 1)}
+          />
+
           {trip.days && trip.days.length > 0 ? (
             <>
+              <SortableContext
+                items={(trip.days || []).map(d => `day-sort-${d.id}`)}
+                strategy={verticalListSortingStrategy}
+              >
               {trip.days.map(day => (
-                <div key={day.id} className="bg-white rounded-xl shadow-sm border border-gray-100">
-                  <button
+                <DroppableDayCard key={day.id} dayId={day.id} dayNumber={day.day_number} day={day} tripId={trip.id}>
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => toggleDay(day.day_number)}
-                    className="w-full flex items-center justify-between p-4"
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleDay(day.day_number); }}
+                    className="w-full flex items-center justify-between p-4 gap-3 cursor-pointer"
                   >
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
-                        J{day.day_number}
+                    <div className="flex items-center gap-4 flex-1 min-w-0">
+                      <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
+                        {getDayBadge(day.day_number, day.day_number_end)}
                       </div>
-                      <div className="text-left">
-                        <h3 className="font-semibold text-gray-900">{day.title || `Jour ${day.day_number}`}</h3>
-                        {(day.location_from || day.location_to || day.overnight_city) && (
-                          <p className="text-sm text-gray-500 flex items-center gap-1">
-                            <MapPin className="w-3 h-3" />
-                            {day.location_from || day.overnight_city}
-                            {day.location_to && day.location_from !== day.location_to && (
-                              <> → {day.location_to}</>
-                            )}
-                          </p>
-                        )}
+                      <div className="text-left flex-1 min-w-0">
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="text"
+                            defaultValue={day.title || ''}
+                            placeholder="Titre du jour..."
+                            className="font-semibold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-emerald-500 rounded px-1 -ml-1 flex-1 min-w-0"
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={(e) => {
+                              if (e.target.value !== (day.title || '')) {
+                                updateTripDay({ tripId: trip.id, dayId: day.id, data: { title: e.target.value } });
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            }}
+                          />
+                          {(() => {
+                            const { dateLabel } = formatTripDayLabel(day.day_number, day.day_number_end, trip.start_date);
+                            return dateLabel ? (
+                              <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">{dateLabel}</span>
+                            ) : null;
+                          })()}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5" onClick={(e) => e.stopPropagation()}>
+                          {/* Meal toggles — detect from accommodation & activities */}
+                          {(() => {
+                            // Detect meals from accommodation:
+                            // Breakfast: served MORNING AFTER the night → Hotel at day S with N nights → breakfast at S+1..S+N
+                            // Lunch/Dinner: served DURING the stay → Hotel at day S with N nights → lunch/dinner at S..S+N-1
+                            let breakfastFromBlock = false;
+                            let lunchFromBlock = false;
+                            let dinnerFromBlock = false;
+                            let mealSourceName = '';
+
+                            for (const [sourceDayNum, info] of accommodationInfoMap.entries()) {
+                              // Breakfast: morning after each night
+                              if (info.breakfastIncluded) {
+                                const firstBreakfast = sourceDayNum + 1;
+                                const lastBreakfast = sourceDayNum + info.nights;
+                                if (day.day_number >= firstBreakfast && day.day_number <= lastBreakfast) {
+                                  breakfastFromBlock = true;
+                                  mealSourceName = info.hotelName;
+                                }
+                              }
+                              // Lunch: during the stay days
+                              if (info.lunchIncluded) {
+                                const firstLunch = sourceDayNum;
+                                const lastLunch = sourceDayNum + info.nights - 1;
+                                if (day.day_number >= firstLunch && day.day_number <= lastLunch) {
+                                  lunchFromBlock = true;
+                                  mealSourceName = info.hotelName;
+                                }
+                              }
+                              // Dinner: evening of each stay day
+                              if (info.dinnerIncluded) {
+                                const firstDinner = sourceDayNum;
+                                const lastDinner = sourceDayNum + info.nights - 1;
+                                if (day.day_number >= firstDinner && day.day_number <= lastDinner) {
+                                  dinnerFromBlock = true;
+                                  mealSourceName = info.hotelName;
+                                }
+                              }
+                            }
+
+                            // Also detect meals from activity blocks
+                            const activityMeals = activityMealsMap.get(day.day_number);
+                            if (activityMeals) {
+                              if (activityMeals.breakfast) { breakfastFromBlock = true; mealSourceName = mealSourceName || 'activité'; }
+                              if (activityMeals.lunch) { lunchFromBlock = true; mealSourceName = mealSourceName || 'activité'; }
+                              if (activityMeals.dinner) { dinnerFromBlock = true; mealSourceName = mealSourceName || 'activité'; }
+                            }
+
+                            const breakfastActive = day.breakfast_included || breakfastFromBlock;
+                            const lunchActive = day.lunch_included || lunchFromBlock;
+                            const dinnerActive = day.dinner_included || dinnerFromBlock;
+
+                            return (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={async () => {
+                                if (breakfastFromBlock && !day.breakfast_included) return;
+                                await updateTripDay({
+                                  tripId: trip.id,
+                                  dayId: day.id,
+                                  data: { breakfast_included: !day.breakfast_included },
+                                });
+                                refetch();
+                              }}
+                              className={`p-1 rounded transition-colors ${
+                                breakfastActive
+                                  ? breakfastFromBlock
+                                    ? 'text-amber-500 hover:text-amber-600'
+                                    : 'text-amber-600 hover:text-amber-700'
+                                  : 'text-gray-300 hover:text-gray-400'
+                              }`}
+                              title={
+                                breakfastFromBlock
+                                  ? `Petit-déjeuner inclus (${mealSourceName})`
+                                  : day.breakfast_included ? 'Petit-déjeuner inclus' : 'Petit-déjeuner non inclus'
+                              }
+                            >
+                              <Coffee className="w-4.5 h-4.5" />
+                            </button>
+                            <button
+                              onClick={async () => {
+                                if (lunchFromBlock && !day.lunch_included) return;
+                                await updateTripDay({
+                                  tripId: trip.id,
+                                  dayId: day.id,
+                                  data: { lunch_included: !day.lunch_included },
+                                });
+                                refetch();
+                              }}
+                              className={`p-1 rounded transition-colors ${
+                                lunchActive
+                                  ? lunchFromBlock
+                                    ? 'text-amber-500 hover:text-amber-600'
+                                    : 'text-amber-600 hover:text-amber-700'
+                                  : 'text-gray-300 hover:text-gray-400'
+                              }`}
+                              title={
+                                lunchFromBlock
+                                  ? `Déjeuner inclus (${mealSourceName})`
+                                  : day.lunch_included ? 'Déjeuner inclus' : 'Déjeuner non inclus'
+                              }
+                            >
+                              <UtensilsCrossed className="w-4.5 h-4.5" />
+                            </button>
+                            <button
+                              onClick={async () => {
+                                if (dinnerFromBlock && !day.dinner_included) return;
+                                await updateTripDay({
+                                  tripId: trip.id,
+                                  dayId: day.id,
+                                  data: { dinner_included: !day.dinner_included },
+                                });
+                                refetch();
+                              }}
+                              className={`p-1 rounded transition-colors ${
+                                dinnerActive
+                                  ? dinnerFromBlock
+                                    ? 'text-amber-500 hover:text-amber-600'
+                                    : 'text-amber-600 hover:text-amber-700'
+                                  : 'text-gray-300 hover:text-gray-400'
+                              }`}
+                              title={
+                                dinnerFromBlock
+                                  ? `Dîner inclus (${mealSourceName})`
+                                  : day.dinner_included ? 'Dîner inclus' : 'Dîner non inclus'
+                              }
+                            >
+                              <Soup className="w-4.5 h-4.5" />
+                            </button>
+                          </div>
+                            );
+                          })()}
+                          <LocationSelector
+                            value={day.location_id}
+                            onChange={async (locationId) => {
+                              await updateTripDay({ tripId: trip.id, dayId: day.id, data: { location_id: locationId } });
+                              refetch();
+                            }}
+                            placeholder="Destination..."
+                            allowCreate
+                            clearable
+                            className="h-7 text-xs border-dashed max-w-[200px]"
+                          />
+                          {(day.location_from || day.location_to) && !day.location_id && (
+                            <span className="text-xs text-gray-400 flex items-center gap-1">
+                              <MapPin className="w-3 h-3" />
+                              {day.location_from}
+                              {day.location_to && day.location_from !== day.location_to && (
+                                <> → {day.location_to}</>
+                              )}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    {expandedDays.includes(day.day_number) ? (
-                      <ChevronUp className="w-5 h-5 text-gray-400" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5 text-gray-400" />
-                    )}
-                  </button>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Boutons +/- pour étendre/réduire le bloc */}
+                      <div className="flex items-center gap-0.5 mr-1" onClick={(e) => e.stopPropagation()}>
+                        {/* Bouton - : visible seulement si le bloc couvre plus d'1 jour */}
+                        {day.day_number_end && day.day_number_end > day.day_number && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              await extendTripDay({ tripId: trip.id, dayId: day.id, delta: -1 });
+                              refetch();
+                            }}
+                            className="flex items-center justify-center w-7 h-7 text-xs text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-md transition-colors border border-gray-200 hover:border-orange-300"
+                            title="Retirer un jour de ce bloc"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            await extendTripDay({ tripId: trip.id, dayId: day.id, delta: 1 });
+                            refetch();
+                          }}
+                          className="flex items-center justify-center w-7 h-7 text-xs text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors border border-gray-200 hover:border-emerald-300"
+                          title="Ajouter un jour à ce bloc"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {expandedDays.includes(day.day_number) ? (
+                        <ChevronUp className="w-5 h-5 text-gray-400" />
+                      ) : (
+                        <ChevronDown className="w-5 h-5 text-gray-400" />
+                      )}
+                    </div>
+                  </div>
 
                   {expandedDays.includes(day.day_number) && (
                     <div className="px-4 pb-4 border-t border-gray-100">
-                      <div className="pt-4">
-                        <textarea
-                          defaultValue={day.description || ''}
-                          placeholder="Description de la journée..."
-                          className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
-                          rows={3}
-                        />
+                      <div className="pt-4 flex gap-4">
+                        {/* Blocs modulaires à gauche */}
+                        <div className="flex-1 min-w-0">
+                          <DayBlockList
+                            tripId={trip.id}
+                            dayId={day.id}
+                            dayNumber={day.day_number}
+                            legacyDescription={day.description}
+                            locationTo={day.location_to}
+                            tripStartDate={trip.start_date}
+                            onRefetch={refetch}
+                            onBlocksLoaded={handleBlocksLoaded}
+                            costNatures={costNatures}
+                            tripDays={trip.duration_days || 7}
+                            onAccommodationLoaded={handleAccommodationLoaded}
+                            onActivityMealsChanged={handleActivityMealsChanged}
+                            linkedAccommodation={getLinkedAccommodation(day.day_number)}
+                            conditionsVersion={conditionsVersion}
+                          />
+                        </div>
+                        {/* Vignette photo à droite */}
+                        {(() => {
+                          const dayPhoto = tripPhotos?.find(p => p.day_number === day.day_number);
+                          if (dayPhoto) {
+                            return (
+                              <div className="flex-shrink-0 w-36">
+                                <div className="relative group">
+                                  <OptimizedImage
+                                    tripPhoto={dayPhoto}
+                                    alt={dayPhoto.alt_text || day.title || `Jour ${day.day_number}`}
+                                    className="w-36 h-24 rounded-lg overflow-hidden shadow-sm"
+                                    imageClassName="w-full h-full"
+                                    sizeHint="thumbnail"
+                                    objectFit="cover"
+                                    showPlaceholder={true}
+                                    lazy={true}
+                                  />
+                                  {/* Overlay hover avec bouton régénérer */}
+                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 rounded-lg transition-all flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setRegeneratePhotoId(dayPhoto.id);
+                                        setRegeneratePrompt(dayPhoto.ai_prompt || '');
+                                        setRegenerateDayNumber(day.day_number);
+                                        setRegenerateDialogOpen(true);
+                                      }}
+                                      className="p-1.5 bg-white/90 rounded-full hover:bg-white transition-colors shadow-sm"
+                                      title="Éditer le prompt / Regénérer"
+                                    >
+                                      <RefreshCw className="w-3.5 h-3.5 text-gray-700" />
+                                    </button>
+                                  </div>
+                                </div>
+                                {dayPhoto.alt_text && (
+                                  <p className="mt-1 text-[10px] text-gray-400 italic text-center truncate">{dayPhoto.alt_text}</p>
+                                )}
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     </div>
                   )}
-                </div>
+                </DroppableDayCard>
               ))}
+              </SortableContext>
 
-              <button className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-emerald-500 hover:text-emerald-600 transition-colors flex items-center justify-center gap-2">
+              {/* DnD tips */}
+              <div className="flex items-center justify-center gap-1.5 py-2 text-gray-400">
+                <Info className="w-3.5 h-3.5 flex-shrink-0" />
+                <p className="text-xs">
+                  Glissez la poignée à gauche d&apos;un jour pour réordonner · Glissez un bloc vers un autre jour pour le déplacer
+                </p>
+              </div>
+
+              <button
+                onClick={async () => {
+                  const maxDay = Math.max(0, ...(trip.days || []).map(d => d.day_number_end || d.day_number));
+                  await createTripDay({ tripId: trip.id, data: { day_number: maxDay + 1 } });
+                  refetch();
+                }}
+                className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-emerald-500 hover:text-emerald-600 transition-colors flex items-center justify-center gap-2"
+              >
                 <Plus className="w-5 h-5" />
                 Ajouter un jour
               </button>
@@ -674,15 +1318,273 @@ export default function CircuitDetailPage() {
               <p className="text-gray-500 mb-4">
                 Ajoutez des jours pour créer le programme du circuit
               </p>
-              <button className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+              <button
+                onClick={async () => {
+                  await createTripDay({ tripId: trip.id, data: { day_number: 1 } });
+                  refetch();
+                }}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+              >
                 Ajouter un jour
               </button>
             </div>
           )}
         </div>
+
+        {/* Source panel sidebar */}
+        {sourcePanelOpen && (
+          <div className="w-80 flex-shrink-0 sticky top-20 h-[calc(100vh-6rem)] overflow-y-auto bg-white rounded-xl shadow-sm border border-gray-100">
+            <SourcePanel currentTripId={trip.id} onClose={() => setSourcePanelOpen(false)} />
+          </div>
+        )}
+        </div>
+
+        {/* Floating button to open source panel */}
+        {!sourcePanelOpen && (
+          <button
+            onClick={() => setSourcePanelOpen(true)}
+            className="fixed right-6 bottom-6 w-12 h-12 bg-emerald-600 text-white rounded-full shadow-lg hover:bg-emerald-700 transition-colors flex items-center justify-center z-40"
+            title="Bibliothèque de blocs"
+          >
+            <Layers className="w-5 h-5" />
+          </button>
+        )}
+        </CircuitDndProvider>
       )}
 
       {activeTab === 'quotation' && (
+        <div className="space-y-6">
+          {/* Conditions panel — change conditions to see price impact */}
+          <ConditionsPanel tripId={trip.id} onConditionsChanged={() => setConditionsVersion(v => v + 1)} />
+
+          {/* Paramètres de tarification (rappel) */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                <DollarSign className="w-4 h-4 text-emerald-600" />
+                Paramètres de tarification
+              </h3>
+              <button
+                onClick={() => setPricingExpanded(!pricingExpanded)}
+                className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+              >
+                {pricingExpanded ? 'Réduire' : 'Modifier'}
+                {pricingExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+            </div>
+
+            {/* Résumé compact (toujours visible) */}
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <span className="px-2 py-1 bg-gray-100 rounded text-gray-700">
+                {settingsData.default_currency}
+              </span>
+              <span className="text-gray-600">
+                Marge : <span className="font-medium">{settingsData.margin_pct}%</span>
+                <span className="text-gray-400 ml-1">({settingsData.margin_type === 'margin' ? 'sur PV' : 'markup'})</span>
+              </span>
+              {settingsData.primary_commission_pct > 0 && (
+                <span className="text-gray-600">
+                  {settingsData.primary_commission_label} : <span className="font-medium">{settingsData.primary_commission_pct}%</span>
+                </span>
+              )}
+              {settingsData.vat_pct > 0 && (
+                <span className="text-gray-600">
+                  TVA : <span className="font-medium">{settingsData.vat_pct}%</span>
+                  <span className="text-gray-400 ml-1">({settingsData.vat_calculation_mode === 'on_margin' ? 'sur marge' : 'sur PV'})</span>
+                </span>
+              )}
+            </div>
+
+            {/* Détail éditable (collapsible) */}
+            {pricingExpanded && (
+              <div className="mt-4 pt-4 border-t border-gray-100 space-y-6">
+                {/* Devise et Marge */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Devise de vente
+                    </label>
+                    <select
+                      value={settingsData.default_currency}
+                      onChange={(e) => setSettingsData(prev => ({ ...prev, default_currency: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                    >
+                      <option value="EUR">EUR (€)</option>
+                      <option value="USD">USD ($)</option>
+                      <option value="GBP">GBP (£)</option>
+                      <option value="CHF">CHF</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Marge (%)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={settingsData.margin_pct}
+                        onChange={(e) => setSettingsData(prev => ({ ...prev, margin_pct: parseFloat(e.target.value) || 0 }))}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <Percent className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Type de marge
+                    </label>
+                    <select
+                      value={settingsData.margin_type}
+                      onChange={(e) => setSettingsData(prev => ({ ...prev, margin_type: e.target.value as 'margin' | 'markup' }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                    >
+                      <option value="margin">Marge (sur PV)</option>
+                      <option value="markup">Markup (sur PA)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Commissions */}
+                <div>
+                  <h4 className="text-xs font-medium text-gray-500 mb-2">Commissions</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <label className="block text-xs text-gray-500 mb-1.5">Commission principale</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={settingsData.primary_commission_label}
+                          onChange={(e) => setSettingsData(prev => ({ ...prev, primary_commission_label: e.target.value }))}
+                          placeholder="Libellé"
+                          className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                        <div className="relative w-20">
+                          <input
+                            type="number"
+                            value={settingsData.primary_commission_pct}
+                            onChange={(e) => setSettingsData(prev => ({ ...prev, primary_commission_pct: parseFloat(e.target.value) || 0 }))}
+                            className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          />
+                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <label className="block text-xs text-gray-500 mb-1.5">Commission secondaire</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={settingsData.secondary_commission_label}
+                          onChange={(e) => setSettingsData(prev => ({ ...prev, secondary_commission_label: e.target.value }))}
+                          placeholder="Libellé"
+                          className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                        <div className="relative w-20">
+                          <input
+                            type="number"
+                            value={settingsData.secondary_commission_pct}
+                            onChange={(e) => setSettingsData(prev => ({ ...prev, secondary_commission_pct: parseFloat(e.target.value) || 0 }))}
+                            className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          />
+                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* TVA */}
+                <div>
+                  <h4 className="text-xs font-medium text-gray-500 mb-2">TVA</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Taux de TVA</label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          value={settingsData.vat_pct}
+                          onChange={(e) => setSettingsData(prev => ({ ...prev, vat_pct: parseFloat(e.target.value) || 0 }))}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Mode de calcul</label>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setSettingsData(prev => ({ ...prev, vat_calculation_mode: 'on_margin' }))}
+                          className={`flex-1 py-2 px-3 rounded-lg border-2 text-xs transition-colors ${
+                            settingsData.vat_calculation_mode === 'on_margin'
+                              ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                              : 'border-gray-200 hover:border-gray-300'
+                          }`}
+                        >
+                          Sur la marge
+                        </button>
+                        <button
+                          onClick={() => setSettingsData(prev => ({ ...prev, vat_calculation_mode: 'on_selling_price' }))}
+                          className={`flex-1 py-2 px-3 rounded-lg border-2 text-xs transition-colors ${
+                            settingsData.vat_calculation_mode === 'on_selling_price'
+                              ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                              : 'border-gray-200 hover:border-gray-300'
+                          }`}
+                        >
+                          Sur prix vente agence
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Taux de change */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-xs font-medium text-gray-500">Taux de change</h4>
+                    <button className="inline-flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-700">
+                      <RefreshCw className="w-3 h-3" />
+                      Actualiser
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="font-medium text-gray-700">
+                        1 {settingsData.default_currency} =
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder={
+                          settingsData.destination_country === 'TH' ? '37.50' :
+                          settingsData.destination_country === 'VN' ? '26500' :
+                          settingsData.destination_country === 'JP' ? '160' :
+                          settingsData.destination_country === 'ID' ? '17200' :
+                          settingsData.destination_country === 'MA' ? '10.80' :
+                          settingsData.destination_country === 'IN' ? '91' :
+                          '1.00'
+                        }
+                        className="w-28 px-3 py-1.5 border border-gray-200 rounded-lg text-right text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <span className="text-sm font-medium text-gray-600 w-12">
+                        {settingsData.destination_country === 'TH' ? 'THB' :
+                         settingsData.destination_country === 'VN' ? 'VND' :
+                         settingsData.destination_country === 'JP' ? 'JPY' :
+                         settingsData.destination_country === 'ID' ? 'IDR' :
+                         settingsData.destination_country === 'MA' ? 'MAD' :
+                         settingsData.destination_country === 'IN' ? 'INR' :
+                         settingsData.destination_country === 'CN' ? 'CNY' :
+                         settingsData.destination_country === 'KH' ? 'USD' :
+                         'USD'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
         <div className="grid grid-cols-12 gap-6">
           {/* Left: Cost Types Navigation + Items */}
           <div className="col-span-8 space-y-4">
@@ -744,7 +1646,7 @@ export default function CircuitDetailPage() {
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                 {/* Tabs Header */}
                 <div className="flex border-b border-gray-200 bg-gray-50">
-                  {defaultCostNatures.map(nature => {
+                  {costNatures.map(nature => {
                     const items = currentFormula?.items?.filter(
                       item => (item.cost_nature?.code || 'MIS') === nature.code
                     ) || [];
@@ -769,7 +1671,7 @@ export default function CircuitDetailPage() {
                             nature.code === 'RES' ? 'bg-red-500' :
                             'bg-gray-500'
                           }`} />
-                          <span className="text-sm">{nature.name}</span>
+                          <span className="text-sm">{nature.label || nature.name}</span>
                           {items.length > 0 && (
                             <span className="text-xs text-gray-400">{total.toFixed(0)} €</span>
                           )}
@@ -794,7 +1696,7 @@ export default function CircuitDetailPage() {
                       return (
                         <div className="text-center py-8 text-gray-500">
                           <Plus className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                          <p className="text-sm mb-3">Aucune prestation {defaultCostNatures.find(n => n.code === natureCode)?.name?.toLowerCase()}</p>
+                          <p className="text-sm mb-3">Aucune prestation {(costNatures.find(n => n.code === natureCode)?.label || costNatures.find(n => n.code === natureCode)?.name || '')?.toLowerCase()}</p>
                           <button
                             onClick={() => {
                               setEditingItem(undefined);
@@ -1090,7 +1992,7 @@ export default function CircuitDetailPage() {
                 <div className="space-y-3">
                   {/* Cost breakdown by type */}
                   <div className="space-y-2 pb-3 border-b border-gray-100">
-                    {defaultCostNatures.map(nature => {
+                    {costNatures.map(nature => {
                       const items = currentFormula?.items?.filter(
                         item => (item.cost_nature?.code || 'MIS') === nature.code
                       ) || [];
@@ -1115,7 +2017,7 @@ export default function CircuitDetailPage() {
                               nature.code === 'RES' ? 'bg-red-500' :
                               'bg-gray-500'
                             }`} />
-                            {nature.name}
+                            {nature.label || nature.name}
                           </span>
                           <span className="font-medium">{total.toFixed(2)} €</span>
                         </div>
@@ -1227,8 +2129,9 @@ export default function CircuitDetailPage() {
           {showItemEditor && (
             <ItemEditor
               item={editingItem}
-              costNatures={defaultCostNatures}
+              costNatures={costNatures}
               tripDays={trip.duration_days || 7}
+              defaultCurrency={trip.default_currency || 'THB'}
               onSave={(itemData) => {
                 console.log('Save item:', itemData);
                 // TODO: Call API to save item
@@ -1242,460 +2145,9 @@ export default function CircuitDetailPage() {
             />
           )}
         </div>
-      )}
-
-      {activeTab === 'settings' && (
-        <div className="max-w-3xl space-y-6">
-          {/* Informations de base */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <Info className="w-5 h-5 text-emerald-600" />
-              Informations de base
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Nom du circuit
-                </label>
-                <input
-                  type="text"
-                  value={settingsData.name}
-                  onChange={(e) => setSettingsData(prev => ({ ...prev, name: e.target.value }))}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Durée (jours)
-                  </label>
-                  <input
-                    type="number"
-                    value={settingsData.duration_days}
-                    onChange={(e) => setSettingsData(prev => ({ ...prev, duration_days: parseInt(e.target.value) || 0 }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Pays de destination
-                  </label>
-                  <select
-                    value={settingsData.destination_country}
-                    onChange={(e) => setSettingsData(prev => ({ ...prev, destination_country: e.target.value }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-                  >
-                    <option value="">Sélectionner...</option>
-                    <option value="TH">🇹🇭 Thaïlande</option>
-                    <option value="VN">🇻🇳 Vietnam</option>
-                    <option value="JP">🇯🇵 Japon</option>
-                    <option value="ID">🇮🇩 Indonésie</option>
-                    <option value="MY">🇲🇾 Malaisie</option>
-                    <option value="KH">🇰🇭 Cambodge</option>
-                    <option value="LA">🇱🇦 Laos</option>
-                    <option value="MM">🇲🇲 Myanmar</option>
-                    <option value="PH">🇵🇭 Philippines</option>
-                    <option value="CN">🇨🇳 Chine</option>
-                    <option value="IN">🇮🇳 Inde</option>
-                    <option value="NP">🇳🇵 Népal</option>
-                    <option value="LK">🇱🇰 Sri Lanka</option>
-                    <option value="MA">🇲🇦 Maroc</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Caractéristiques du voyage */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <Star className="w-5 h-5 text-amber-500" />
-              Caractéristiques du voyage
-            </h3>
-            <div className="grid grid-cols-2 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Niveau de confort
-                </label>
-                <div className="flex items-center gap-1">
-                  {[1, 2, 3, 4, 5].map((level) => (
-                    <button
-                      key={level}
-                      onClick={() => setSettingsData(prev => ({ ...prev, comfort_level: level }))}
-                      className="p-1 transition-colors"
-                    >
-                      <Star
-                        className={`w-6 h-6 ${
-                          level <= settingsData.comfort_level
-                            ? 'fill-amber-400 text-amber-400'
-                            : 'text-gray-300'
-                        }`}
-                      />
-                    </button>
-                  ))}
-                  <span className="ml-2 text-sm text-gray-500">
-                    {settingsData.comfort_level}/5
-                  </span>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Niveau de difficulté
-                </label>
-                <div className="flex items-center gap-1">
-                  {[1, 2, 3, 4, 5].map((level) => (
-                    <button
-                      key={level}
-                      onClick={() => setSettingsData(prev => ({ ...prev, difficulty_level: level }))}
-                      className="p-1 transition-colors"
-                    >
-                      <Mountain
-                        className={`w-6 h-6 ${
-                          level <= settingsData.difficulty_level
-                            ? 'fill-orange-400 text-orange-400'
-                            : 'text-gray-300'
-                        }`}
-                      />
-                    </button>
-                  ))}
-                  <span className="ml-2 text-sm text-gray-500">
-                    {settingsData.difficulty_level}/5
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Thématiques de voyage */}
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                Thématiques de voyage
-              </label>
-              {themesLoading ? (
-                <div className="flex items-center gap-2 text-gray-500">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">Chargement des thématiques...</span>
-                </div>
-              ) : availableThemes && availableThemes.length > 0 ? (
-                <ThemeCheckboxGrid
-                  themes={availableThemes}
-                  selectedIds={selectedThemeIds}
-                  onChange={setSelectedThemeIds}
-                />
-              ) : (
-                <p className="text-sm text-gray-500">
-                  Aucune thématique disponible. Configurez-les dans les paramètres.
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Tarification */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <DollarSign className="w-5 h-5 text-emerald-600" />
-              Tarification
-            </h3>
-            <div className="space-y-6">
-              {/* Devise et Marge */}
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Devise de vente
-                  </label>
-                  <select
-                    value={settingsData.default_currency}
-                    onChange={(e) => setSettingsData(prev => ({ ...prev, default_currency: e.target.value }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-                  >
-                    <option value="EUR">EUR (€)</option>
-                    <option value="USD">USD ($)</option>
-                    <option value="GBP">GBP (£)</option>
-                    <option value="CHF">CHF</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Marge (%)
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={settingsData.margin_pct}
-                      onChange={(e) => setSettingsData(prev => ({ ...prev, margin_pct: parseFloat(e.target.value) || 0 }))}
-                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                    <Percent className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Type de marge
-                  </label>
-                  <select
-                    value={settingsData.margin_type}
-                    onChange={(e) => setSettingsData(prev => ({ ...prev, margin_type: e.target.value as 'margin' | 'markup' }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-                  >
-                    <option value="margin">Marge (sur PV)</option>
-                    <option value="markup">Markup (sur PA)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Commissions */}
-              <div className="border-t border-gray-200 pt-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">Commissions</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-4 bg-gray-50 rounded-lg">
-                    <label className="block text-xs font-medium text-gray-500 mb-2">
-                      Commission principale
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={settingsData.primary_commission_label}
-                        onChange={(e) => setSettingsData(prev => ({ ...prev, primary_commission_label: e.target.value }))}
-                        placeholder="Libellé"
-                        className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                      <div className="relative w-24">
-                        <input
-                          type="number"
-                          value={settingsData.primary_commission_pct}
-                          onChange={(e) => setSettingsData(prev => ({ ...prev, primary_commission_pct: parseFloat(e.target.value) || 0 }))}
-                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">%</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="p-4 bg-gray-50 rounded-lg">
-                    <label className="block text-xs font-medium text-gray-500 mb-2">
-                      Commission secondaire (optionnel)
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={settingsData.secondary_commission_label}
-                        onChange={(e) => setSettingsData(prev => ({ ...prev, secondary_commission_label: e.target.value }))}
-                        placeholder="Libellé"
-                        className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                      <div className="relative w-24">
-                        <input
-                          type="number"
-                          value={settingsData.secondary_commission_pct}
-                          onChange={(e) => setSettingsData(prev => ({ ...prev, secondary_commission_pct: parseFloat(e.target.value) || 0 }))}
-                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">%</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* TVA */}
-              <div className="border-t border-gray-200 pt-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">TVA</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">
-                      Taux de TVA
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={settingsData.vat_pct}
-                        onChange={(e) => setSettingsData(prev => ({ ...prev, vat_pct: parseFloat(e.target.value) || 0 }))}
-                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">%</span>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">
-                      Mode de calcul
-                    </label>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setSettingsData(prev => ({ ...prev, vat_calculation_mode: 'on_margin' }))}
-                        className={`flex-1 py-2 px-3 rounded-lg border-2 text-sm transition-colors ${
-                          settingsData.vat_calculation_mode === 'on_margin'
-                            ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                            : 'border-gray-200 hover:border-gray-300'
-                        }`}
-                      >
-                        Sur la marge
-                      </button>
-                      <button
-                        onClick={() => setSettingsData(prev => ({ ...prev, vat_calculation_mode: 'on_selling_price' }))}
-                        className={`flex-1 py-2 px-3 rounded-lg border-2 text-sm transition-colors ${
-                          settingsData.vat_calculation_mode === 'on_selling_price'
-                            ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                            : 'border-gray-200 hover:border-gray-300'
-                        }`}
-                      >
-                        Sur prix vente agence
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-500 mt-2">
-                  {settingsData.vat_calculation_mode === 'on_margin'
-                    ? 'TVA calculée sur la marge brute'
-                    : 'TVA calculée sur le prix de vente moins la commission principale'}
-                </p>
-              </div>
-
-              {/* Taux de change */}
-              <div className="border-t border-gray-200 pt-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-sm font-medium text-gray-700">Taux de change</h4>
-                  <button className="inline-flex items-center gap-1 text-sm text-emerald-600 hover:text-emerald-700">
-                    <RefreshCw className="w-4 h-4" />
-                    Actualiser depuis Kantox
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  {/* Devise principale du pays */}
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg">
-                        {settingsData.destination_country === 'TH' ? '🇹🇭' :
-                         settingsData.destination_country === 'VN' ? '🇻🇳' :
-                         settingsData.destination_country === 'JP' ? '🇯🇵' :
-                         settingsData.destination_country === 'ID' ? '🇮🇩' :
-                         settingsData.destination_country === 'MA' ? '🇲🇦' :
-                         settingsData.destination_country === 'IN' ? '🇮🇳' :
-                         '🌍'}
-                      </span>
-                      <div>
-                        <div className="font-medium text-gray-900">
-                          1 {settingsData.default_currency} =
-                        </div>
-                        <div className="text-xs text-gray-500">Devise du pays</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        step="0.01"
-                        placeholder={
-                          settingsData.destination_country === 'TH' ? '37.50' :
-                          settingsData.destination_country === 'VN' ? '26500' :
-                          settingsData.destination_country === 'JP' ? '160' :
-                          settingsData.destination_country === 'ID' ? '17200' :
-                          settingsData.destination_country === 'MA' ? '10.80' :
-                          settingsData.destination_country === 'IN' ? '91' :
-                          '1.00'
-                        }
-                        className="w-28 px-3 py-2 border border-gray-200 rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                      <span className="text-sm font-medium text-gray-600 w-12">
-                        {settingsData.destination_country === 'TH' ? 'THB' :
-                         settingsData.destination_country === 'VN' ? 'VND' :
-                         settingsData.destination_country === 'JP' ? 'JPY' :
-                         settingsData.destination_country === 'ID' ? 'IDR' :
-                         settingsData.destination_country === 'MA' ? 'MAD' :
-                         settingsData.destination_country === 'IN' ? 'INR' :
-                         settingsData.destination_country === 'CN' ? 'CNY' :
-                         settingsData.destination_country === 'KH' ? 'USD' :
-                         'USD'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Taux Kantox indicatif */}
-                  <div className="flex items-center justify-between text-sm text-gray-500 px-3">
-                    <span>Taux Kantox indicatif :</span>
-                    <span className="font-mono">
-                      {settingsData.destination_country === 'TH' ? '37.45' :
-                       settingsData.destination_country === 'VN' ? '26450' :
-                       settingsData.destination_country === 'JP' ? '159.80' :
-                       settingsData.destination_country === 'ID' ? '17150' :
-                       settingsData.destination_country === 'MA' ? '10.75' :
-                       settingsData.destination_country === 'IN' ? '90.80' :
-                       '-'}
-                    </span>
-                  </div>
-
-                  {/* Ajouter une devise */}
-                  <button className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-emerald-500 hover:text-emerald-600 transition-colors flex items-center justify-center gap-2 text-sm">
-                    <Plus className="w-4 h-4" />
-                    Ajouter une devise (USD, etc.)
-                  </button>
-
-                  <p className="text-xs text-gray-500">
-                    Les taux sont utilisés pour convertir les coûts des prestations en devise locale vers votre devise de vente ({settingsData.default_currency}).
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Informations client (si circuit sur mesure) */}
-          {(trip.type === 'custom' || trip.client_name) && (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                <Users className="w-5 h-5 text-blue-600" />
-                Informations client
-              </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Nom du client
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsData.client_name}
-                    onChange={(e) => setSettingsData(prev => ({ ...prev, client_name: e.target.value }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email
-                  </label>
-                  <input
-                    type="email"
-                    value={settingsData.client_email}
-                    onChange={(e) => setSettingsData(prev => ({ ...prev, client_email: e.target.value }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-              </div>
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Date de départ
-                </label>
-                <input
-                  type="date"
-                  value={settingsData.start_date}
-                  onChange={(e) => setSettingsData(prev => ({ ...prev, start_date: e.target.value }))}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Zone de danger */}
-          <div className="bg-white rounded-xl shadow-sm border border-red-100 p-6">
-            <h3 className="text-lg font-semibold text-red-600 mb-4 flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5" />
-              Zone de danger
-            </h3>
-            <p className="text-sm text-gray-600 mb-4">
-              La suppression d'un circuit est irréversible. Toutes les données associées seront perdues.
-            </p>
-            <button className="px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors">
-              Supprimer ce circuit
-            </button>
-          </div>
         </div>
       )}
+
 
       {/* Translation Modal */}
       {showTranslateModal && (
@@ -1876,6 +2328,79 @@ export default function CircuitDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Regenerate Photo Dialog */}
+      <Dialog open={regenerateDialogOpen} onOpenChange={setRegenerateDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RefreshCw className="w-5 h-5 text-emerald-600" />
+              Regénérer la photo — Jour {regenerateDayNumber}
+            </DialogTitle>
+            <DialogDescription>
+              Modifiez le prompt ci-dessous puis cliquez sur Regénérer pour obtenir une nouvelle image via l&apos;IA.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Prompt de génération
+              </label>
+              <textarea
+                value={regeneratePrompt}
+                onChange={(e) => setRegeneratePrompt(e.target.value)}
+                placeholder="Décrivez l'image souhaitée..."
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none text-sm"
+                rows={6}
+              />
+              <p className="mt-1 text-xs text-gray-400">
+                Laissez vide pour regénérer automatiquement depuis la description du jour.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <button
+              onClick={() => setRegenerateDialogOpen(false)}
+              className="px-4 py-2 border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors text-sm"
+            >
+              Annuler
+            </button>
+            <button
+              onClick={async () => {
+                if (!regeneratePhotoId) return;
+                try {
+                  await regeneratePhoto({
+                    tripId: parseInt(tripId),
+                    photoId: regeneratePhotoId,
+                    prompt: regeneratePrompt || undefined,
+                    quality: 'high',
+                  });
+                  setRegenerateDialogOpen(false);
+                  refetchPhotos();
+                } catch (err) {
+                  console.error('Regeneration failed:', err);
+                }
+              }}
+              disabled={regenerating}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 text-sm"
+            >
+              {regenerating ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Génération en cours...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  Regénérer
+                </>
+              )}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
