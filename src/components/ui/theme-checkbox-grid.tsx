@@ -1,30 +1,10 @@
 'use client';
 
 import * as React from 'react';
+import { Check } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
+import { ThemeIcon, getThemeIconConfig } from '@/components/ui/theme-icon';
 import type { TravelTheme } from '@/lib/api/types';
-
-// Default icons for themes (emoji fallback if no icon specified)
-const THEME_ICONS: Record<string, string> = {
-  randonnee: '🥾',
-  trekking: '🏔️',
-  equestre: '🐴',
-  famille: '👨‍👩‍👧‍👦',
-  luxe: '✨',
-  aventure: '🧗',
-  culture: '🏛️',
-  gastronomie: '🍽️',
-  nature: '🌿',
-  sport: '⚽',
-  plage: '🏖️',
-  bien_etre: '🧘',
-  photographie: '📷',
-  observation: '🔭',
-  histoire: '📜',
-  spirituel: '🕉️',
-  artisanat: '🎨',
-  oenologie: '🍷',
-};
 
 interface ThemeCheckboxGridProps {
   themes: TravelTheme[];
@@ -63,7 +43,8 @@ export function ThemeCheckboxGrid({
     <div className={cn('grid gap-2', gridCols[columns], className)}>
       {themes.map((theme) => {
         const isSelected = selectedIds.includes(theme.id);
-        const icon = theme.icon || THEME_ICONS[theme.code] || '🏷️';
+        const config = getThemeIconConfig(theme.code);
+        const borderColor = config?.color || '#d4d4d4';
 
         return (
           <label
@@ -71,10 +52,14 @@ export function ThemeCheckboxGrid({
             className={cn(
               'flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all select-none',
               isSelected
-                ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                ? 'shadow-sm'
                 : 'border-gray-200 hover:border-gray-300 bg-white text-gray-700',
               disabled && 'opacity-50 cursor-not-allowed'
             )}
+            style={isSelected ? {
+              borderColor,
+              backgroundColor: config?.bgColor || '#f0fdf4',
+            } : undefined}
           >
             <input
               type="checkbox"
@@ -83,25 +68,22 @@ export function ThemeCheckboxGrid({
               disabled={disabled}
               className="sr-only"
             />
-            <span className="text-lg flex-shrink-0">{icon}</span>
+            <ThemeIcon code={theme.code} size={20} withBackground={false} />
             <span className={cn(
               'text-sm font-medium truncate',
-              isSelected ? 'text-emerald-800' : 'text-gray-700'
-            )}>
+              !isSelected && 'text-gray-700'
+            )}
+              style={isSelected ? { color: config?.color || '#065f46' } : undefined}
+            >
               {theme.label}
             </span>
             {isSelected && (
-              <svg
-                className="w-4 h-4 ml-auto text-emerald-600 flex-shrink-0"
-                fill="currentColor"
-                viewBox="0 0 20 20"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                  clipRule="evenodd"
-                />
-              </svg>
+              <Check
+                weight="bold"
+                size={16}
+                className="ml-auto flex-shrink-0"
+                style={{ color: config?.color || '#059669' }}
+              />
             )}
           </label>
         );
@@ -110,24 +92,18 @@ export function ThemeCheckboxGrid({
   );
 }
 
-// Export default themes for seeding
+// Export default themes for seeding (must match backend DEFAULT_TRAVEL_THEMES)
 export const DEFAULT_THEMES = [
-  { code: 'randonnee', label: 'Randonnée' },
-  { code: 'trekking', label: 'Trekking' },
-  { code: 'equestre', label: 'Équestre' },
+  { code: 'culture_histoire', label: 'Culture & Histoire' },
+  { code: 'nature_faune', label: 'Nature & Faune' },
+  { code: 'aventure_trek', label: 'Aventure & Trek' },
+  { code: 'plages_iles', label: 'Plages & Îles' },
   { code: 'famille', label: 'Famille' },
-  { code: 'luxe', label: 'Luxe' },
-  { code: 'aventure', label: 'Aventure' },
-  { code: 'culture', label: 'Culture' },
-  { code: 'gastronomie', label: 'Gastronomie' },
-  { code: 'nature', label: 'Nature' },
-  { code: 'sport', label: 'Sport' },
-  { code: 'plage', label: 'Plage & Détente' },
-  { code: 'bien_etre', label: 'Bien-être' },
-  { code: 'photographie', label: 'Photographie' },
-  { code: 'observation', label: 'Observation animalière' },
-  { code: 'histoire', label: 'Histoire' },
-  { code: 'spirituel', label: 'Spirituel' },
-  { code: 'artisanat', label: 'Artisanat' },
-  { code: 'oenologie', label: 'Oenologie' },
+  { code: 'luxe_bien_etre', label: 'Luxe & Bien-être' },
+  { code: 'gastronomie_vins', label: 'Gastronomie & Vins' },
+  { code: 'hors_sentiers', label: 'Hors des sentiers battus' },
+  { code: 'road_trip', label: 'Road Trip' },
+  { code: 'croisiere_nautique', label: 'Croisière & Nautique' },
+  { code: 'spiritualite', label: 'Spiritualité & Ressourcement' },
+  { code: 'evenements_festivals', label: 'Événements & Festivals' },
 ];

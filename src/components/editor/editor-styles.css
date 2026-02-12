@@ -1,0 +1,206 @@
+/* ─── ProseMirror / Tiptap Editor Styles ─────────────────────────── */
+
+/* Editor container */
+.tiptap-editor .ProseMirror {
+  outline: none;
+  min-height: 120px;
+  padding: 12px 16px;
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #171717;
+}
+
+.tiptap-editor .ProseMirror:focus {
+  outline: none;
+}
+
+/* Compact mode — smaller min height */
+.tiptap-editor--compact .ProseMirror {
+  min-height: 80px;
+  padding: 8px 12px;
+}
+
+/* ─── Placeholder ────────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #a3a3a3;
+  pointer-events: none;
+  height: 0;
+  font-style: italic;
+}
+
+/* ─── Typography ─────────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror h2 {
+  font-family: 'Nunito', sans-serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+  color: #262626;
+}
+
+.tiptap-editor .ProseMirror h3 {
+  font-family: 'Nunito', sans-serif;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 1em;
+  margin-bottom: 0.4em;
+  color: #404040;
+}
+
+.tiptap-editor .ProseMirror p {
+  margin-bottom: 0.5em;
+}
+
+.tiptap-editor .ProseMirror p:last-child {
+  margin-bottom: 0;
+}
+
+/* ─── Bold / Italic / Underline ──────────────────────────────────── */
+.tiptap-editor .ProseMirror strong {
+  font-weight: 700;
+}
+
+.tiptap-editor .ProseMirror em {
+  font-style: italic;
+}
+
+.tiptap-editor .ProseMirror u {
+  text-decoration: underline;
+}
+
+/* ─── Links ──────────────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror a {
+  color: #0FB6BC;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.tiptap-editor .ProseMirror a:hover {
+  color: #0C9296;
+}
+
+/* ─── Lists ──────────────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror ul {
+  list-style-type: disc;
+  padding-left: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.tiptap-editor .ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.tiptap-editor .ProseMirror li {
+  margin-bottom: 0.15em;
+}
+
+.tiptap-editor .ProseMirror li p {
+  margin-bottom: 0.1em;
+}
+
+/* ─── Blockquote ─────────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror blockquote {
+  border-left: 3px solid #DD9371;
+  padding-left: 1em;
+  margin-left: 0;
+  margin-bottom: 0.75em;
+  color: #525252;
+  font-style: italic;
+}
+
+/* ─── Horizontal Rule ────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror hr {
+  border: none;
+  border-top: 1px solid #e5e5e5;
+  margin: 1em 0;
+}
+
+/* ─── Callout Blocks ─────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror .callout {
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 0.75em;
+  border-left: 4px solid;
+}
+
+.tiptap-editor .ProseMirror .callout p:last-child {
+  margin-bottom: 0;
+}
+
+/* Info callout — turquoise */
+.tiptap-editor .ProseMirror .callout-info {
+  background-color: #E6F9FA;
+  border-left-color: #0FB6BC;
+  color: #06494B;
+}
+
+/* Warning callout — terracotta */
+.tiptap-editor .ProseMirror .callout-warning {
+  background-color: #FDF5F2;
+  border-left-color: #DD9371;
+  color: #834A33;
+}
+
+/* Tip callout — sage */
+.tiptap-editor .ProseMirror .callout-tip {
+  background-color: #F4F7F3;
+  border-left-color: #8BA080;
+  color: #42523C;
+}
+
+/* Important callout — red */
+.tiptap-editor .ProseMirror .callout-important {
+  background-color: #FEF2F2;
+  border-left-color: #DC2626;
+  color: #7F1D1D;
+}
+
+/* ─── Content Reference (Phase 2) placeholder styles ─────────────── */
+.tiptap-editor .ProseMirror content-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background-color: #CCF3F5;
+  color: #096D71;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  font-weight: 500;
+  cursor: default;
+  user-select: none;
+  vertical-align: baseline;
+}
+
+/* ─── Selection ──────────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror ::selection {
+  background-color: #CCF3F5;
+}
+
+/* ─── Inline mode — borderless, minimal padding ─────────────────── */
+.tiptap-editor--inline .ProseMirror {
+  min-height: auto;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.tiptap-editor--inline .ProseMirror p {
+  margin-bottom: 0.25em;
+}
+
+.tiptap-editor--inline .ProseMirror p:last-child {
+  margin-bottom: 0;
+}
+
+/* ─── Disabled state ─────────────────────────────────────────────── */
+.tiptap-editor--disabled .ProseMirror {
+  background-color: #f5f5f5;
+  color: #a3a3a3;
+  cursor: not-allowed;
+}
