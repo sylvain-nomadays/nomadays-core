@@ -97,9 +97,9 @@ BEGIN
     RETURN v_dossier.tenant_id = v_tenant_id OR v_dossier.advisor_id = auth.uid();
   END IF;
 
-  -- DMC staff : accès aux dossiers où ils sont DMC assignée
+  -- DMC staff : accès aux dossiers de leur tenant OU où ils sont DMC assignée
   IF v_role IN ('dmc_manager', 'dmc_seller') THEN
-    RETURN v_dossier.dmc_id = v_tenant_id;
+    RETURN v_dossier.tenant_id = v_tenant_id OR v_dossier.dmc_id = v_tenant_id;
   END IF;
 
   -- Client : accès à ses propres dossiers
@@ -201,11 +201,12 @@ CREATE POLICY dossiers_select ON dossiers FOR SELECT
   TO authenticated
   USING (public.can_access_dossier(id));
 
--- Création : staff Nomadays ou agence B2B pour leur tenant
+-- Création : staff Nomadays, staff DMC pour leur tenant, ou agence B2B pour leur tenant
 CREATE POLICY dossiers_insert ON dossiers FOR INSERT
   TO authenticated
   WITH CHECK (
     public.is_nomadays_staff()
+    OR (public.is_dmc_staff() AND tenant_id = public.get_user_tenant_id())
     OR (public.get_user_role() = 'agency_b2b' AND tenant_id = public.get_user_tenant_id())
   );
 
