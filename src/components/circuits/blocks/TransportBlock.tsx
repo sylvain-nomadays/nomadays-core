@@ -21,11 +21,17 @@ import {
   Pencil,
   Trash2,
   SlidersHorizontal,
+  Bookmark,
+  LayoutTemplate,
 } from 'lucide-react';
 import { LocationSelector } from '@/components/suppliers/LocationSelector';
 import { useLocations } from '@/hooks/useLocations';
 import { useCreateItem, useUpdateItem, useDeleteItem } from '@/hooks/useFormulaItems';
 import ItemEditor from '@/components/circuits/ItemEditor';
+import { RichTextEditor } from '@/components/editor';
+import SaveAsTemplateDialog from '@/components/templates/SaveAsTemplateDialog';
+import TemplateSyncDialog from '@/components/templates/TemplateSyncDialog';
+import { getBlockSyncStatus } from '@/hooks/useTemplateSync';
 import type { Formula, TransportMeta, TransportMode, Item, CostNature, PaymentFlow } from '@/lib/api/types';
 import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { mapRatioRule } from '@/lib/ratioUtils';
@@ -34,8 +40,8 @@ import { mapRatioRule } from '@/lib/ratioUtils';
 const PAYMENT_FLOW_OPTIONS: { value: PaymentFlow; label: string; colorClass: string }[] = [
   { value: 'booking', label: 'Fournisseur', colorClass: 'text-blue-600' },
   { value: 'advance', label: 'Allowance', colorClass: 'text-amber-600' },
-  { value: 'purchase_order', label: 'Achat bureau', colorClass: 'text-purple-600' },
-  { value: 'payroll', label: 'Salaire', colorClass: 'text-emerald-600' },
+  { value: 'purchase_order', label: 'Achat bureau', colorClass: 'text-[#C97A56]' },
+  { value: 'payroll', label: 'Salaire', colorClass: 'text-[#8BA080]' },
   { value: 'manual', label: 'Manuel', colorClass: 'text-gray-500' },
 ];
 
@@ -108,6 +114,8 @@ interface TransportBlockProps {
   tripDays?: number;
   /** Current day number (1-based) for pre-filling day_start/day_end */
   dayNumber?: number;
+  /** VAT calculation mode — hides TTC/HT toggle when 'on_margin' */
+  vatMode?: 'on_margin' | 'on_selling_price';
 }
 
 export function TransportBlock({
@@ -121,6 +129,7 @@ export function TransportBlock({
   costNatures,
   tripDays,
   dayNumber,
+  vatMode,
 }: TransportBlockProps) {
   // Parse initial metadata
   const initialMeta = parseTransportMeta(block.description_html);
@@ -150,6 +159,11 @@ export function TransportBlock({
   const [editingItem, setEditingItem] = useState<Partial<Item> | undefined>();
   const [deletingItemId, setDeletingItemId] = useState<number | null>(null);
 
+  // Template state
+  const [showSaveAsTemplate, setShowSaveAsTemplate] = useState(false);
+  const [showSyncDialog, setShowSyncDialog] = useState(false);
+  const syncStatus = getBlockSyncStatus(block);
+
   // Item CRUD hooks
   const { mutate: createItem } = useCreateItem();
   const { mutate: updateItem } = useUpdateItem();
@@ -159,18 +173,9 @@ export function TransportBlock({
   const { locations } = useLocations({ is_active: true, page_size: 200 });
 
   const debounceRef = useRef<NodeJS.Timeout>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Current mode config
   const modeConfig = getModeConfig(travelMode);
-
-  // Auto-resize textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.max(textareaRef.current.scrollHeight, 24)}px`;
-    }
-  }, [narrativeText]);
 
   // Resolve location name from ID
   const getLocationName = useCallback((locationId: number | null): string => {
@@ -203,9 +208,10 @@ export function TransportBlock({
     persistMeta({ travel_mode: newMode });
   };
 
-  const handleNarrativeChange = (value: string) => {
-    setNarrativeText(value);
-    persistMeta({ narrative_text: value || undefined });
+  const handleNarrativeChange = (html: string) => {
+    setNarrativeText(html);
+    // RichTextEditor already debounces internally (500ms)
+    persistMeta({ narrative_text: html || undefined });
   };
 
   const handleFromChange = (locationId: number | null) => {
@@ -407,189 +413,128 @@ export function TransportBlock({
 
   return (
     <>
-      <div className="group relative rounded-lg border border-purple-200 bg-purple-50/30 hover:border-purple-300 transition-colors">
+      <div className="group relative rounded-lg border border-[#F7D7CB] bg-[#FDF5F2]/30 hover:border-[#F3C3B1] transition-colors">
 
         {/* ============================================================ */}
         {/* COMPACT HEADER — always visible (~45px)                      */}
         {/* ============================================================ */}
-        <div className="flex items-center gap-2 p-2.5">
+        <div className="flex items-start gap-2 p-2.5">
           {/* Drag handle */}
           <div
-            className="flex-shrink-0 cursor-grab text-gray-300 hover:text-gray-500 transition-colors"
+            className="flex-shrink-0 mt-1 cursor-grab text-gray-300 hover:text-gray-500 transition-colors"
             {...dragListeners}
             {...dragAttributes}
           >
             <GripVertical className="w-4 h-4" />
           </div>
 
-          {/* Mode emoji */}
-          <span className="flex-shrink-0 text-sm" title={modeConfig.label}>
-            {modeConfig.emoji || '🚗'}
-          </span>
-
-          {/* Narrative text input (inline, single line) */}
-          <textarea
-            ref={textareaRef}
-            value={narrativeText}
-            onChange={(e) => handleNarrativeChange(e.target.value)}
-            placeholder="Description du déplacement..."
-            className="flex-1 min-w-0 resize-none border-0 bg-transparent text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-0 p-0 leading-6"
-            rows={1}
-          />
-
-          {/* Summary badge (when collapsed & has route data) */}
-          {!detailsOpen && summaryText && (
-            <span className="flex-shrink-0 text-[10px] text-purple-500 bg-purple-100 px-1.5 py-0.5 rounded-full whitespace-nowrap max-w-[200px] truncate">
-              {summaryText}
+          {/* Content column: emoji + editor */}
+          <div className="flex-1 min-w-0 flex items-start gap-2">
+            <span className="flex-shrink-0 text-sm mt-0.5" title={modeConfig.label}>
+              {modeConfig.emoji || '🚗'}
             </span>
-          )}
+            <div className="flex-1 min-w-0">
+              <RichTextEditor
+                content={narrativeText}
+                onChange={handleNarrativeChange}
+                placeholder="Description du déplacement..."
+                inline
+                enableContentRefs
+              />
+            </div>
+          </div>
 
-          {/* Prestations count badge */}
-          {!detailsOpen && directItems.length > 0 && (
-            <span className="flex-shrink-0 text-[10px] text-purple-600 font-medium whitespace-nowrap">
-              {totalCost.toLocaleString('fr-FR')} THB
-            </span>
-          )}
-
-          {/* Expand/collapse toggle */}
-          <button
-            onClick={() => setDetailsOpen(!detailsOpen)}
-            className="flex-shrink-0 p-1 text-gray-300 hover:text-purple-500 transition-colors rounded hover:bg-purple-100"
-            title={detailsOpen ? 'Réduire' : 'Détails'}
-          >
-            {detailsOpen ? (
-              <ChevronUp className="w-4 h-4" />
-            ) : (
-              <ChevronDown className="w-4 h-4" />
+          {/* Right-side action buttons */}
+          <div className="flex items-center gap-0.5 flex-shrink-0 mt-1">
+            {/* Template sync indicator */}
+            {syncStatus !== 'no_template' && (
+              <button
+                onClick={() => setShowSyncDialog(true)}
+                className={`flex-shrink-0 p-1 transition-all ${
+                  syncStatus === 'template_updated'
+                    ? 'text-amber-500 animate-pulse'
+                    : 'text-emerald-400 opacity-0 group-hover:opacity-100'
+                }`}
+                title={syncStatus === 'template_updated' ? 'Template mis à jour' : 'Lié à un template'}
+              >
+                <LayoutTemplate className="w-3.5 h-3.5" />
+              </button>
             )}
-          </button>
 
-          {/* Delete button */}
-          <button
-            onClick={onDelete}
-            className="flex-shrink-0 opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all p-1"
-            title="Supprimer ce bloc"
-          >
-            <X className="w-4 h-4" />
-          </button>
+            {/* Save as template button */}
+            <button
+              onClick={() => setShowSaveAsTemplate(true)}
+              className="flex-shrink-0 opacity-0 group-hover:opacity-100 text-gray-300 hover:text-[#0FB6BC] transition-all p-1"
+              title="Sauvegarder comme template"
+            >
+              <Bookmark className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Delete button */}
+            <button
+              onClick={onDelete}
+              className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all p-1"
+              title="Supprimer ce bloc"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* ============================================================ */}
-        {/* DETAILS PANEL — collapsible                                  */}
+        {/* PRESTATIONS — always visible, like ActivityBlock              */}
         {/* ============================================================ */}
-        {detailsOpen && (
-          <div className="border-t border-purple-100 px-3 py-2.5 space-y-2.5">
-            {/* Mode selector + locations row */}
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* Mode select */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-gray-400">Mode</span>
-                <select
-                  value={travelMode}
-                  onChange={(e) => handleModeChange(e.target.value as TransportMode)}
-                  className="text-xs bg-white border border-purple-200 rounded-md px-2 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-400 cursor-pointer"
-                >
-                  {TRANSPORT_MODES.map((mode) => (
-                    <option key={mode.value} value={mode.value}>
-                      {mode.emoji ? `${mode.emoji} ` : ''}{mode.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Location fields */}
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* From */}
-              <div className="flex items-center gap-1.5 flex-1 min-w-[180px]">
-                <span className="text-xs text-gray-400 w-6 flex-shrink-0 text-right">De</span>
-                <LocationSelector
-                  value={fromLocationId}
-                  onChange={handleFromChange}
-                  placeholder="Départ..."
-                  allowCreate
-                  clearable
-                  className="flex-1 h-8 text-xs"
-                />
-              </div>
-              {/* To */}
-              <div className="flex items-center gap-1.5 flex-1 min-w-[180px]">
-                <span className="text-xs text-gray-400 w-6 flex-shrink-0 text-right">→</span>
-                <LocationSelector
-                  value={toLocationId}
-                  onChange={handleToChange}
-                  placeholder="Arrivée..."
-                  allowCreate
-                  clearable
-                  className="flex-1 h-8 text-xs"
-                />
-              </div>
-            </div>
-
-            {/* Duration / Distance */}
-            <div className="flex items-center gap-4 flex-wrap">
-              {/* Duration input */}
-              <div className="flex items-center gap-1">
-                <Clock className="w-3 h-3 text-gray-400" />
-                <input
-                  type="number"
-                  min={0}
-                  value={durationMinutes ?? ''}
-                  onChange={(e) => handleDurationChange(e.target.value)}
-                  placeholder="min"
-                  className="w-16 text-xs bg-white border border-gray-200 rounded px-1.5 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-400"
-                />
-                <span className="text-xs text-gray-400">min</span>
-                {durationMinutes ? (
-                  <span className="text-xs text-gray-500 ml-0.5">({formatDuration(durationMinutes)})</span>
-                ) : null}
-              </div>
-
-              {/* Distance input */}
-              <div className="flex items-center gap-1">
-                <Ruler className="w-3 h-3 text-gray-400" />
-                <input
-                  type="number"
-                  min={0}
-                  value={distanceKm ?? ''}
-                  onChange={(e) => handleDistanceChange(e.target.value)}
-                  placeholder="km"
-                  className="w-16 text-xs bg-white border border-gray-200 rounded px-1.5 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-400"
-                />
-                <span className="text-xs text-gray-400">km</span>
-              </div>
-            </div>
-
-            {/* ============================================================ */}
-            {/* PRESTATIONS — nested collapsible                             */}
-            {/* ============================================================ */}
-            <div className="border-t border-purple-100 pt-2">
-              <button
-                onClick={() => setPrestationsOpen(!prestationsOpen)}
-                className="w-full flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+        <div className="border-t border-[#FBEBE5]">
+          <button
+            onClick={() => setPrestationsOpen(!prestationsOpen)}
+            className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+          >
+            {prestationsOpen ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+            <span className="font-medium">Prestations</span>
+            {directItems.length > 0 && (
+              <span className="text-gray-400 ml-1">
+                ({directItems.length})
+              </span>
+            )}
+            {/* Route summary badge — click to open/edit details */}
+            {summaryText ? (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDetailsOpen(!detailsOpen);
+                }}
+                className="text-[10px] text-[#DD9371] bg-[#FBEBE5] hover:bg-[#F7D7CB] px-1.5 py-0.5 rounded-full whitespace-nowrap max-w-[250px] truncate ml-1 cursor-pointer transition-colors"
+                title="Cliquer pour modifier les détails du trajet"
               >
-                {prestationsOpen ? (
-                  <ChevronDown className="w-3 h-3" />
-                ) : (
-                  <ChevronRight className="w-3 h-3" />
-                )}
-                <span className="font-medium">Prestations</span>
-                {directItems.length > 0 && (
-                  <span className="text-gray-400 ml-1">
-                    ({directItems.length})
-                  </span>
-                )}
-                {totalCost > 0 && (
-                  <span className="text-purple-600 font-medium ml-auto">
-                    {totalCost.toLocaleString('fr-FR')} THB
-                  </span>
-                )}
-              </button>
+                {summaryText}
+              </span>
+            ) : (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDetailsOpen(!detailsOpen);
+                }}
+                className="text-[10px] text-[#E8AB91] hover:text-[#C97A56] bg-[#FDF5F2] hover:bg-[#FBEBE5] px-1.5 py-0.5 rounded-full whitespace-nowrap ml-1 cursor-pointer transition-colors border border-dashed border-[#F7D7CB]"
+                title="Cliquer pour définir le trajet"
+              >
+                + Trajet
+              </span>
+            )}
+            {totalCost > 0 && (
+              <span className="text-[#C97A56] font-medium ml-auto">
+                {totalCost.toLocaleString('fr-FR')} THB
+              </span>
+            )}
+          </button>
 
-              {prestationsOpen && (
-                <div className="mt-2 space-y-1.5">
-                  {/* Existing items */}
-                  {directItems.map((item) => (
+          {prestationsOpen && (
+            <div className="px-3 pb-3 space-y-1.5">
+              {/* Existing items */}
+              {directItems.map((item) => (
                     <div
                       key={item.id}
                       className="flex items-center gap-2 px-2 py-1.5 rounded bg-white border border-gray-100 text-xs group/item"
@@ -610,7 +555,7 @@ export function TransportBlock({
                             ));
                           }
                         }}
-                        className="flex-shrink-0 text-[10px] border rounded px-1 py-0.5 bg-white focus:ring-1 focus:ring-purple-400 max-w-[90px] border-gray-200 text-gray-600 cursor-pointer"
+                        className="flex-shrink-0 text-[10px] border rounded px-1 py-0.5 bg-white focus:ring-1 focus:ring-[#E8AB91] max-w-[90px] border-gray-200 text-gray-600 cursor-pointer"
                         title="Flux de paiement"
                         onClick={(e) => e.stopPropagation()}
                       >
@@ -618,7 +563,8 @@ export function TransportBlock({
                           <option key={f.value} value={f.value}>{f.label}</option>
                         ))}
                       </select>
-                      {/* TTC/HT inline toggle */}
+                      {/* TTC/HT inline toggle — only in on_selling_price mode */}
+                      {vatMode !== 'on_margin' && (
                       <button
                         onClick={async (e) => {
                           e.stopPropagation();
@@ -643,13 +589,14 @@ export function TransportBlock({
                       >
                         {item.price_includes_vat ? 'TTC' : 'HT'}
                       </button>
+                      )}
                       <span className="font-medium text-gray-700 flex-1 truncate">{item.name}</span>
-                      <span className="text-purple-600 font-medium whitespace-nowrap">
+                      <span className="text-[#C97A56] font-medium whitespace-nowrap">
                         {((item.unit_cost || 0) * (item.quantity || 1)).toLocaleString('fr-FR')} {item.currency || 'THB'}
                       </span>
                       <button
                         onClick={() => handleEditItem(item as Item)}
-                        className="p-0.5 text-gray-300 hover:text-purple-600 opacity-0 group-hover/item:opacity-100 transition-all"
+                        className="p-0.5 text-gray-300 hover:text-[#C97A56] opacity-0 group-hover/item:opacity-100 transition-all"
                         title="Modifier"
                       >
                         <Pencil className="w-3 h-3" />
@@ -675,14 +622,15 @@ export function TransportBlock({
                     <select
                       value={quickFlow}
                       onChange={(e) => setQuickFlow(e.target.value as PaymentFlow)}
-                      className="text-[10px] bg-white border border-dashed border-gray-200 rounded px-1 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-purple-400 cursor-pointer"
+                      className="text-[10px] bg-white border border-dashed border-gray-200 rounded px-1 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-[#E8AB91] cursor-pointer"
                       title="Flux de paiement"
                     >
                       {PAYMENT_FLOW_OPTIONS.map(f => (
                         <option key={f.value} value={f.value}>{f.label}</option>
                       ))}
                     </select>
-                    {/* TTC/HT toggle */}
+                    {/* TTC/HT toggle — only in on_selling_price mode */}
+                    {vatMode !== 'on_margin' && (
                     <button
                       type="button"
                       onClick={() => setQuickTTC(!quickTTC)}
@@ -695,6 +643,7 @@ export function TransportBlock({
                     >
                       {quickTTC ? 'TTC' : 'HT'}
                     </button>
+                    )}
                     <input
                       type="text"
                       value={quickName}
@@ -706,7 +655,7 @@ export function TransportBlock({
                         }
                       }}
                       placeholder="Nom de la prestation..."
-                      className="flex-1 min-w-[120px] text-xs bg-white border border-dashed border-gray-200 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-400 focus:border-purple-300 placeholder:text-gray-300"
+                      className="flex-1 min-w-[120px] text-xs bg-white border border-dashed border-gray-200 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-[#E8AB91] focus:border-[#F3C3B1] placeholder:text-gray-300"
                     />
                     <input
                       type="number"
@@ -721,12 +670,12 @@ export function TransportBlock({
                       placeholder="Prix"
                       min={0}
                       step={0.01}
-                      className="w-20 text-xs bg-white border border-dashed border-gray-200 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-400 focus:border-purple-300 placeholder:text-gray-300 text-right"
+                      className="w-20 text-xs bg-white border border-dashed border-gray-200 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-[#E8AB91] focus:border-[#F3C3B1] placeholder:text-gray-300 text-right"
                     />
                     <select
                       value={quickRatio}
                       onChange={(e) => setQuickRatio(e.target.value as 'set' | 'per_person' | 'per_vehicle')}
-                      className="text-xs bg-white border border-dashed border-gray-200 rounded px-1.5 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-purple-400 cursor-pointer"
+                      className="text-xs bg-white border border-dashed border-gray-200 rounded px-1.5 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-[#E8AB91] cursor-pointer"
                       title="Tarification"
                     >
                       <option value="set">Forfait</option>
@@ -736,7 +685,7 @@ export function TransportBlock({
                     <button
                       onClick={handleQuickAdd}
                       disabled={!quickName.trim() || addingItem}
-                      className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800 bg-purple-50 hover:bg-purple-100 px-2 py-1.5 rounded border border-purple-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                      className="flex items-center gap-1 text-xs text-[#C97A56] hover:text-[#834A33] bg-[#FDF5F2] hover:bg-[#FBEBE5] px-2 py-1.5 rounded border border-[#F7D7CB] transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                     >
                       {addingItem ? (
                         <Loader2 className="w-3 h-3 animate-spin" />
@@ -750,7 +699,7 @@ export function TransportBlock({
                         setEditingItem({ cost_nature_code: 'TRS', day_start: dayNumber || 1, day_end: dayNumber || 1 });
                         setShowItemEditor(true);
                       }}
-                      className="flex items-center gap-1 text-xs text-gray-500 hover:text-purple-700 hover:bg-purple-50 px-2 py-1.5 rounded border border-dashed border-gray-300 hover:border-purple-300 transition-colors whitespace-nowrap"
+                      className="flex items-center gap-1 text-xs text-gray-500 hover:text-purple-700 hover:bg-purple-50 px-2 py-1.5 rounded border border-dashed border-gray-300 hover:border-[#F3C3B1] transition-colors whitespace-nowrap"
                       title="Ouvrir le formulaire de cotation détaillé"
                     >
                       <SlidersHorizontal className="w-3 h-3" />
@@ -764,8 +713,88 @@ export function TransportBlock({
                       Ajoutez des prestations (transfert, vol, etc.)
                     </p>
                   )}
-                </div>
-              )}
+            </div>
+          )}
+        </div>
+
+        {/* ============================================================ */}
+        {/* DETAILS PANEL — collapsible (mode, locations, distance)       */}
+        {/* ============================================================ */}
+        {detailsOpen && (
+          <div className="border-t border-[#FBEBE5] px-3 py-2.5 space-y-2.5">
+            {/* Mode selector */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-400">Mode</span>
+                <select
+                  value={travelMode}
+                  onChange={(e) => handleModeChange(e.target.value as TransportMode)}
+                  className="text-xs bg-white border border-[#F7D7CB] rounded-md px-2 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-[#E8AB91] cursor-pointer"
+                >
+                  {TRANSPORT_MODES.map((mode) => (
+                    <option key={mode.value} value={mode.value}>
+                      {mode.emoji ? `${mode.emoji} ` : ''}{mode.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Location fields */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-1 min-w-[180px]">
+                <span className="text-xs text-gray-400 w-6 flex-shrink-0 text-right">De</span>
+                <LocationSelector
+                  value={fromLocationId}
+                  onChange={handleFromChange}
+                  placeholder="Départ..."
+                  allowCreate
+                  clearable
+                  className="flex-1 h-8 text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-1.5 flex-1 min-w-[180px]">
+                <span className="text-xs text-gray-400 w-6 flex-shrink-0 text-right">→</span>
+                <LocationSelector
+                  value={toLocationId}
+                  onChange={handleToChange}
+                  placeholder="Arrivée..."
+                  allowCreate
+                  clearable
+                  className="flex-1 h-8 text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Duration / Distance */}
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex items-center gap-1">
+                <Clock className="w-3 h-3 text-gray-400" />
+                <input
+                  type="number"
+                  min={0}
+                  value={durationMinutes ?? ''}
+                  onChange={(e) => handleDurationChange(e.target.value)}
+                  placeholder="min"
+                  className="w-16 text-xs bg-white border border-gray-200 rounded px-1.5 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-[#E8AB91]"
+                />
+                <span className="text-xs text-gray-400">min</span>
+                {durationMinutes ? (
+                  <span className="text-xs text-gray-500 ml-0.5">({formatDuration(durationMinutes)})</span>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-1">
+                <Ruler className="w-3 h-3 text-gray-400" />
+                <input
+                  type="number"
+                  min={0}
+                  value={distanceKm ?? ''}
+                  onChange={(e) => handleDistanceChange(e.target.value)}
+                  placeholder="km"
+                  className="w-16 text-xs bg-white border border-gray-200 rounded px-1.5 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-[#E8AB91]"
+                />
+                <span className="text-xs text-gray-400">km</span>
+              </div>
             </div>
           </div>
         )}
@@ -778,11 +807,35 @@ export function TransportBlock({
           costNatures={costNatures}
           tripDays={tripDays || 7}
           defaultCurrency="THB"
+          vatMode={vatMode}
           onSave={handleItemEditorSave}
           onCancel={() => {
             setShowItemEditor(false);
             setEditingItem(undefined);
           }}
+        />
+      )}
+
+      {/* Save as template dialog */}
+      <SaveAsTemplateDialog
+        isOpen={showSaveAsTemplate}
+        onClose={() => setShowSaveAsTemplate(false)}
+        formulaId={block.id}
+        defaultName={block.name}
+        defaultCategory={block.block_type || 'transport'}
+      />
+
+      {/* Template sync dialog */}
+      {block.template_source_id && (
+        <TemplateSyncDialog
+          isOpen={showSyncDialog}
+          onClose={() => setShowSyncDialog(false)}
+          formulaId={block.id}
+          formulaName={block.name}
+          templateSourceId={block.template_source_id}
+          sourceVersion={block.template_source_version ?? 0}
+          templateVersion={block.template_version ?? 1}
+          onSynced={onRefetch}
         />
       )}
     </>

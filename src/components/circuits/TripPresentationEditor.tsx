@@ -6,17 +6,19 @@ import { FileText, Sparkles, Plus, X, Loader2, GripVertical } from 'lucide-react
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RichTextEditor } from '@/components/editor';
 import type { DescriptionTone, TripHighlight } from '@/lib/api/types';
 
 interface TripPresentationEditorProps {
   descriptionShort?: string;
+  descriptionHtml?: string;
   descriptionTone?: DescriptionTone;
   highlights?: TripHighlight[];
   onChange: (data: {
     description_short?: string;
+    description_html?: string;
     description_tone?: DescriptionTone;
     highlights?: TripHighlight[];
   }) => void;
@@ -57,6 +59,7 @@ const HIGHLIGHT_ICONS = ['⭐', '🏛️', '🌅', '🍜', '🐘', '🚣', '🏔
  */
 export function TripPresentationEditor({
   descriptionShort = '',
+  descriptionHtml = '',
   descriptionTone = 'factuel',
   highlights = [],
   onChange,
@@ -67,12 +70,12 @@ export function TripPresentationEditor({
 }: TripPresentationEditorProps) {
   const [newHighlight, setNewHighlight] = useState('');
 
-  const handleDescriptionChange = (value: string) => {
-    onChange({ description_short: value, description_tone: descriptionTone, highlights });
+  const handleDescriptionHtmlChange = (html: string) => {
+    onChange({ description_html: html, description_tone: descriptionTone, highlights });
   };
 
   const handleToneChange = (tone: DescriptionTone) => {
-    onChange({ description_short: descriptionShort, description_tone: tone, highlights });
+    onChange({ description_tone: tone, highlights });
   };
 
   const handleAddHighlight = () => {
@@ -81,20 +84,20 @@ export function TripPresentationEditor({
       ...highlights,
       { title: newHighlight.trim(), icon: HIGHLIGHT_ICONS[highlights.length % HIGHLIGHT_ICONS.length] },
     ];
-    onChange({ description_short: descriptionShort, description_tone: descriptionTone, highlights: updatedHighlights });
+    onChange({ description_tone: descriptionTone, highlights: updatedHighlights });
     setNewHighlight('');
   };
 
   const handleRemoveHighlight = (index: number) => {
     const updatedHighlights = highlights.filter((_, i) => i !== index);
-    onChange({ description_short: descriptionShort, description_tone: descriptionTone, highlights: updatedHighlights });
+    onChange({ description_tone: descriptionTone, highlights: updatedHighlights });
   };
 
   const handleHighlightChange = (index: number, value: string) => {
     const updatedHighlights = highlights.map((h, i) =>
       i === index ? { ...h, title: value } : h
     );
-    onChange({ description_short: descriptionShort, description_tone: descriptionTone, highlights: updatedHighlights });
+    onChange({ description_tone: descriptionTone, highlights: updatedHighlights });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -161,24 +164,19 @@ export function TripPresentationEditor({
           </div>
         </div>
 
-        {/* Description textarea */}
+        {/* Description — Rich Text Editor */}
         <div className="space-y-2">
-          <Label htmlFor="description">
+          <Label>
             Texte de présentation
             <span className="text-gray-400 font-normal ml-2">(7-10 lignes recommandées)</span>
           </Label>
-          <Textarea
-            id="description"
-            value={descriptionShort}
-            onChange={(e) => handleDescriptionChange(e.target.value)}
+          <RichTextEditor
+            content={descriptionHtml || descriptionShort || ''}
+            onChange={handleDescriptionHtmlChange}
             placeholder="Décrivez votre circuit en quelques lignes..."
-            rows={6}
-            className="resize-none"
+            enableContentRefs
+            editable={!readOnly}
           />
-          <div className="flex justify-between text-xs text-gray-400">
-            <span>{descriptionShort.split('\n').filter(l => l.trim()).length} lignes</span>
-            <span>{descriptionShort.length} caractères</span>
-          </div>
         </div>
 
         {/* Highlights */}

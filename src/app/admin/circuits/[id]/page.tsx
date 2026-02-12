@@ -41,6 +41,10 @@ import {
   Coffee,
   UtensilsCrossed,
   Soup,
+  BedDouble,
+  BookOpen,
+  FolderOpen,
+  ClipboardList,
 } from 'lucide-react';
 import { useTrip, useUpdateTrip, useTripPhotos, useRegenerateTripPhoto, useUploadTripPhoto, useCreateTripDay, useUpdateTripDay, useDeleteTripDay, useExtendTripDay, useReorderDays } from '@/hooks/useTrips';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -51,9 +55,12 @@ import { CircuitDndProvider, DroppableDayCard, SourcePanel } from '@/components/
 import { useMoveBlock, useDuplicateBlock, useCopyDayBlocks, useReorderBlocks } from '@/hooks/useBlocks';
 import { formatTripDayLabel, getDayBadge } from '@/lib/formatTripDate';
 import OptimizedImage from '@/components/common/OptimizedImage';
+import { useLocationPhotosByIds } from '@/hooks/useLocations';
 import { useLanguages, useTripTranslations, useTranslateTrip, useTranslationPreview, usePushTranslation } from '@/hooks/useTranslation';
 import { useTravelThemes } from '@/hooks/useTravelThemes';
 import { useCostNatures } from '@/hooks/useCostNatures';
+import { useCotations } from '@/hooks/useCotations';
+import { useCountryVatRates } from '@/hooks/useCountryVatRates';
 import { LanguageSelector, StaleWarningBanner, PreviewModeIndicator } from '@/components/circuits/LanguageSelector';
 import { TranslationVersionsNav } from '@/components/circuits/TranslationVersionsNav';
 import { ThemeCheckboxGrid } from '@/components/ui/theme-checkbox-grid';
@@ -65,7 +72,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-import type { Trip, TripDay, Formula, QuotationResult, TripHighlight, InclusionItem, DescriptionTone, CostNature, Item, PaxConfig } from '@/lib/api/types';
+import type { Trip, TripDay, Formula, QuotationResult, TripHighlight, InclusionItem, DescriptionTone, CostNature, Item, PaxConfig, RoomDemandEntry, LocationPhoto } from '@/lib/api/types';
 import {
   TripMapEditor,
   TripPresentationEditor,
@@ -78,10 +85,49 @@ import {
   EarlyBirdAlerts,
   TransversalServicesPanel,
   ConditionsPanel,
+  RoomDemandEditor,
 } from '@/components/circuits';
+import PreBookingDialog from '@/components/circuits/PreBookingDialog';
+import dynamic from 'next/dynamic';
 import { useEarlyBirdAlerts } from '@/hooks/useEarlyBirdAlerts';
+import { useTripConditions } from '@/hooks/useConditions';
 import { TRIP_STATUS, getStatusConfig, TONE_OPTIONS } from '@/lib/constants/circuits';
 import { getCountryFlag, getCountryName } from '@/lib/constants/countries';
+import { SelectCircuitDialog } from '@/components/dossiers/select-circuit-dialog';
+
+// Lazy load CotationsTab to avoid loading cotation dependencies when tab is inactive
+const CotationsTab = dynamic(
+  () => import('@/components/circuits/cotations/CotationsTab'),
+  { loading: () => <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-[#0FB6BC] animate-spin" /></div> }
+);
+
+// Lazy load TarificationPanel
+const TarificationPanel = dynamic(
+  () => import('@/components/circuits/cotations/TarificationPanel'),
+  { loading: () => <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 text-[#0FB6BC] animate-spin" /></div> }
+);
+
+// Lazy load RoadbookEditor
+const RoadbookEditor = dynamic(
+  () => import('@/components/circuits/roadbook/RoadbookEditor'),
+  { loading: () => <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-[#0FB6BC] animate-spin" /></div> }
+);
+
+// Map destination country code → local currency code
+function getLocalCurrency(destinationCountry: string): string {
+  const map: Record<string, string> = {
+    TH: 'THB', VN: 'VND', JP: 'JPY', ID: 'IDR',
+    MA: 'MAD', IN: 'INR', CN: 'CNY', KH: 'USD',
+    LA: 'LAK', MM: 'MMK', PH: 'PHP', MY: 'MYR',
+    SG: 'SGD', KR: 'KRW', LK: 'LKR', NP: 'NPR',
+    MX: 'MXN', PE: 'PEN', CO: 'COP', BR: 'BRL',
+    AR: 'ARS', CL: 'CLP', CR: 'CRC', CU: 'CUP',
+    TZ: 'TZS', KE: 'KES', ZA: 'ZAR', EG: 'EGP',
+    GH: 'GHS', ET: 'ETB', MG: 'MGA', MU: 'MUR',
+    TR: 'TRY', GE: 'GEL', UZ: 'UZS', AZ: 'AZN',
+  };
+  return map[destinationCountry] || 'USD';
+}
 
 // Pax configurations par défaut
 const defaultPaxConfigs: { pax: number; rooms: number }[] = [
@@ -90,7 +136,7 @@ const defaultPaxConfigs: { pax: number; rooms: number }[] = [
   { pax: 6, rooms: 3 },
 ];
 
-type TabType = 'presentation' | 'program' | 'quotation';
+type TabType = 'presentation' | 'program' | 'roadbook' | 'cotations' | 'tarification';
 
 export default function CircuitDetailPage() {
   const params = useParams();
@@ -169,6 +215,42 @@ export default function CircuitDetailPage() {
     return undefined;
   }, [accommodationInfoMap]);
 
+  // ─── Location photos for auto-illustration ───────────────────────────
+  // Extract unique location_ids from trip days
+  const locationIds = useMemo(() => {
+    if (!trip?.days) return [];
+    const ids = new Set<number>();
+    trip.days.forEach(day => {
+      if (day.location_id) ids.add(day.location_id);
+    });
+    return Array.from(ids);
+  }, [trip?.days]);
+
+  // Fetch location photos in batch
+  const { data: locationPhotosMap } = useLocationPhotosByIds(locationIds);
+
+  /**
+   * Get the location photo for a specific day.
+   * Distribution: 1st photo for 1st day at that location, 2nd photo for 2nd day, etc.
+   * Returns null if no location photo available or if day already has a TripPhoto.
+   */
+  const getLocationPhotoForDay = useCallback((day: TripDay): LocationPhoto | null => {
+    if (!day.location_id || !locationPhotosMap) return null;
+
+    const photos = locationPhotosMap[String(day.location_id)];
+    if (!photos?.length) return null;
+
+    // Count how many days BEFORE this one use the same location_id
+    const allDays = trip?.days || [];
+    const sameLocationDaysBefore = allDays.filter(
+      d => d.location_id === day.location_id && d.day_number < day.day_number
+    ).length;
+
+    // If we have more days than photos, return null (no cycling)
+    if (sameLocationDaysBefore >= photos.length) return null;
+    return photos[sameLocationDaysBefore] ?? null;
+  }, [locationPhotosMap, trip?.days]);
+
   const [activeTab, setActiveTab] = useState<TabType>('presentation');
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   // Regenerate photo dialog state
@@ -186,6 +268,7 @@ export default function CircuitDetailPage() {
   // Presentation state
   const [presentationData, setPresentationData] = useState({
     description_short: '',
+    description_html: '',
     description_tone: 'factuel' as DescriptionTone,
     highlights: [] as TripHighlight[],
   });
@@ -199,6 +282,11 @@ export default function CircuitDetailPage() {
     info_booking_conditions: '',
     info_cancellation_policy: '',
     info_additional: '',
+    info_general_html: '',
+    info_formalities_html: '',
+    info_booking_conditions_html: '',
+    info_cancellation_policy_html: '',
+    info_additional_html: '',
   });
 
   // Settings state
@@ -226,6 +314,21 @@ export default function CircuitDetailPage() {
     start_date: '',
   });
 
+  // Room demand state (trip-level default room allocation)
+  const [roomDemand, setRoomDemand] = useState<RoomDemandEntry[]>([]);
+
+  // Roadbook intro state
+  const [roadbookIntro, setRoadbookIntro] = useState('');
+
+  // Exchange rate state: user-facing value (e.g. 37.50 for "1 EUR = 37.50 THB")
+  const [exchangeRateValue, setExchangeRateValue] = useState<string>('');
+
+  // Pre-booking state
+  const [showPreBookingDialog, setShowPreBookingDialog] = useState(false);
+
+  // Select for dossier state
+  const [showSelectForDossier, setShowSelectForDossier] = useState(false);
+
   // Translation state
   const [showTranslateModal, setShowTranslateModal] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<string>('');
@@ -252,6 +355,9 @@ export default function CircuitDetailPage() {
   // Cost natures (from API, with fallback to defaults)
   const { costNatures } = useCostNatures();
 
+  // Country VAT rates (from Configuration)
+  const { data: vatRates } = useCountryVatRates();
+  const globalVatRate = vatRates && vatRates.length > 0 ? vatRates[0] : null;
 
   const [selectedThemeIds, setSelectedThemeIds] = useState<number[]>([]);
 
@@ -261,6 +367,19 @@ export default function CircuitDetailPage() {
   const [pricingExpanded, setPricingExpanded] = useState(false);
   const [conditionsVersion, setConditionsVersion] = useState(0);
 
+  // Cotations for tarification tab
+  const {
+    cotations: tarificationCotations,
+    refetch: refetchTarificationCotations,
+  } = useCotations(trip?.id);
+
+  // Conditions for context banner
+  const { tripConditions: tarificationConditions } = useTripConditions(trip?.id, conditionsVersion);
+  const [tarificationCotationId, setTarificationCotationId] = useState<number | null>(null);
+  const activeTarificationCotation = tarificationCotations.find(c => c.id === tarificationCotationId)
+    || tarificationCotations.find(c => c.status === 'calculated')
+    || null;
+
   // Cost natures are now fetched via useCostNatures() hook above
 
   // Initialise les données de présentation depuis le trip
@@ -268,6 +387,7 @@ export default function CircuitDetailPage() {
     if (trip) {
       setPresentationData({
         description_short: trip.description_short || '',
+        description_html: trip.description_html || '',
         description_tone: (trip.description_tone as DescriptionTone) || 'factuel',
         highlights: trip.highlights || [],
       });
@@ -281,6 +401,11 @@ export default function CircuitDetailPage() {
         info_booking_conditions: trip.info_booking_conditions || '',
         info_cancellation_policy: trip.info_cancellation_policy || '',
         info_additional: trip.info_additional || '',
+        info_general_html: trip.info_general_html || '',
+        info_formalities_html: trip.info_formalities_html || '',
+        info_booking_conditions_html: trip.info_booking_conditions_html || '',
+        info_cancellation_policy_html: trip.info_cancellation_policy_html || '',
+        info_additional_html: trip.info_additional_html || '',
       });
 
       // Settings data
@@ -291,8 +416,8 @@ export default function CircuitDetailPage() {
         default_currency: trip.default_currency || 'EUR',
         margin_pct: trip.margin_pct || 30,
         margin_type: trip.margin_type || 'margin',
-        vat_pct: trip.vat_pct || 20,
-        vat_calculation_mode: trip.vat_calculation_mode || 'on_margin',
+        vat_pct: globalVatRate ? globalVatRate.vat_rate_standard : (trip.vat_pct || 20),
+        vat_calculation_mode: globalVatRate ? globalVatRate.vat_calculation_mode : (trip.vat_calculation_mode || 'on_margin'),
         primary_commission_pct: trip.primary_commission_pct || 11.5,
         primary_commission_label: trip.primary_commission_label || 'Nomadays',
         secondary_commission_pct: trip.secondary_commission_pct || 0,
@@ -303,6 +428,26 @@ export default function CircuitDetailPage() {
         client_email: trip.client_email || '',
         start_date: trip.start_date || '',
       });
+
+      // Room demand
+      setRoomDemand(trip.room_demand_json || []);
+
+      // Roadbook intro
+      setRoadbookIntro(trip.roadbook_intro_html || '');
+
+      // Exchange rate: load from currency_rates_json
+      // Engine stores rate as "1 THB = 0.0267 EUR", UI shows "1 EUR = 37.50 THB"
+      const localCurrency = getLocalCurrency(trip.destination_country || '');
+      const storedRates = trip.currency_rates_json?.rates || {};
+      const storedRate = storedRates[localCurrency];
+      if (storedRate) {
+        const engineRate = typeof storedRate === 'object' ? storedRate.rate : storedRate;
+        if (engineRate && engineRate > 0) {
+          // Inverse: engine rate 0.0267 → UI value 37.50
+          const uiValue = 1 / engineRate;
+          setExchangeRateValue(uiValue.toFixed(2));
+        }
+      }
 
       // Travel themes
       if (trip.themes && trip.themes.length > 0) {
@@ -322,7 +467,18 @@ export default function CircuitDetailPage() {
         }
       }
     }
-  }, [trip]);
+  }, [trip, globalVatRate]);
+
+  // Sync TVA when global config changes (after initial trip load)
+  useEffect(() => {
+    if (globalVatRate) {
+      setSettingsData(prev => ({
+        ...prev,
+        vat_pct: globalVatRate.vat_rate_standard,
+        vat_calculation_mode: globalVatRate.vat_calculation_mode,
+      }));
+    }
+  }, [globalVatRate]);
 
   // Calcul de la cotation
   useEffect(() => {
@@ -406,6 +562,7 @@ export default function CircuitDetailPage() {
         data: {
           // Présentation
           description_short: presentationData.description_short,
+          description_html: presentationData.description_html,
           description_tone: presentationData.description_tone,
           highlights: presentationData.highlights,
           inclusions: inclusionsExclusions.inclusions,
@@ -430,11 +587,27 @@ export default function CircuitDetailPage() {
           secondary_commission_pct: settingsData.secondary_commission_pct,
           secondary_commission_label: settingsData.secondary_commission_label,
           // Client
-          client_name: settingsData.client_name,
-          client_email: settingsData.client_email,
-          start_date: settingsData.start_date,
+          client_name: settingsData.client_name || undefined,
+          client_email: settingsData.client_email || undefined,
+          start_date: settingsData.start_date || undefined,
+          // Roadbook
+          roadbook_intro_html: roadbookIntro,
           // Thématiques
           theme_ids: selectedThemeIds,
+          // Répartition chambres
+          room_demand_json: roomDemand.length > 0 ? roomDemand : null,
+          // Taux de change
+          ...(exchangeRateValue && parseFloat(exchangeRateValue) > 0 ? {
+            currency_rates_json: {
+              rates: {
+                [getLocalCurrency(settingsData.destination_country)]: {
+                  rate: 1 / parseFloat(exchangeRateValue),
+                  source: 'manual' as const,
+                },
+              },
+              base_currency: settingsData.default_currency,
+            },
+          } : {}),
         },
       });
       // Rafraîchir les données
@@ -464,7 +637,7 @@ export default function CircuitDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+        <Loader2 className="w-8 h-8 text-[#0FB6BC] animate-spin" />
       </div>
     );
   }
@@ -579,6 +752,17 @@ export default function CircuitDetailPage() {
                     Départ: {new Date(trip.start_date).toLocaleDateString('fr-FR')}
                   </span>
                 )}
+                {trip.dossier_id && (
+                  <Link
+                    href={`/admin/dossiers/${trip.dossier_id}`}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                    title="Voir le dossier lié"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    <span>Dossier</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </Link>
+                )}
               </div>
             </div>
           </div>
@@ -600,6 +784,22 @@ export default function CircuitDetailPage() {
               <Copy className="w-4 h-4" />
               Dupliquer
             </button>
+            {trip.dossier_id && trip.status === 'sent' && (
+              <button
+                onClick={() => setShowSelectForDossier(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 border border-[#0FB6BC] text-[#0FB6BC] rounded-lg hover:bg-[#E6F9FA] transition-colors"
+              >
+                <CheckCircle className="w-4 h-4" />
+                Sélectionner pour le dossier
+              </button>
+            )}
+            <button
+              onClick={() => setShowPreBookingDialog(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 border border-[#CCF3F5] text-[#0C9296] rounded-lg hover:bg-[#E6F9FA] transition-colors"
+            >
+              <ClipboardList className="w-4 h-4" />
+              Pré-réserver
+            </button>
             <button className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50">
               <FileText className="w-4 h-4" />
               Générer PDF
@@ -607,7 +807,7 @@ export default function CircuitDetailPage() {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="inline-flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+              className="inline-flex items-center gap-2 bg-[#0FB6BC] text-white px-4 py-2 rounded-lg hover:bg-[#0C9296] disabled:opacity-50"
             >
               {saving ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -638,14 +838,16 @@ export default function CircuitDetailPage() {
           {[
             { id: 'presentation', label: 'Présentation', icon: FileText },
             { id: 'program', label: 'Programme', icon: Calendar },
-            { id: 'quotation', label: 'Cotation', icon: Calculator },
+            { id: 'roadbook', label: 'Roadbook', icon: BookOpen },
+            { id: 'cotations', label: 'Cotations', icon: Calculator },
+            { id: 'tarification', label: 'Tarification', icon: DollarSign },
           ].map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as TabType)}
               className={`flex items-center gap-2 pb-4 border-b-2 transition-colors ${
                 activeTab === tab.id
-                  ? 'border-emerald-600 text-emerald-600'
+                  ? 'border-[#0C9296] text-[#0C9296]'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
@@ -720,7 +922,7 @@ export default function CircuitDetailPage() {
                   type="text"
                   value={settingsData.name}
                   onChange={(e) => setSettingsData(prev => ({ ...prev, name: e.target.value }))}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                 />
               </div>
 
@@ -733,7 +935,7 @@ export default function CircuitDetailPage() {
                     type="number"
                     value={settingsData.duration_days}
                     onChange={(e) => setSettingsData(prev => ({ ...prev, duration_days: parseInt(e.target.value) || 0 }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                   />
                 </div>
                 <div>
@@ -743,7 +945,7 @@ export default function CircuitDetailPage() {
                   <select
                     value={settingsData.destination_country}
                     onChange={(e) => setSettingsData(prev => ({ ...prev, destination_country: e.target.value }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0FB6BC] bg-white"
                   >
                     <option value="">Sélectionner...</option>
                     <option value="TH">🇹🇭 Thaïlande</option>
@@ -771,7 +973,7 @@ export default function CircuitDetailPage() {
                       type="date"
                       value={settingsData.start_date}
                       onChange={(e) => setSettingsData(prev => ({ ...prev, start_date: e.target.value }))}
-                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                     />
                   </div>
                 )}
@@ -842,7 +1044,7 @@ export default function CircuitDetailPage() {
                       type="text"
                       value={settingsData.client_name}
                       onChange={(e) => setSettingsData(prev => ({ ...prev, client_name: e.target.value }))}
-                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                     />
                   </div>
                   <div>
@@ -853,7 +1055,7 @@ export default function CircuitDetailPage() {
                       type="email"
                       value={settingsData.client_email}
                       onChange={(e) => setSettingsData(prev => ({ ...prev, client_email: e.target.value }))}
-                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                     />
                   </div>
                 </div>
@@ -887,15 +1089,17 @@ export default function CircuitDetailPage() {
           {/* Presentation */}
           <TripPresentationEditor
             descriptionShort={previewLanguage && preview?.content.description_short ? preview.content.description_short : presentationData.description_short}
+            descriptionHtml={presentationData.description_html}
             descriptionTone={presentationData.description_tone}
             highlights={previewLanguage && preview?.content.highlights ? preview.content.highlights : presentationData.highlights}
             onChange={(data) => {
               if (!previewLanguage) {
-                setPresentationData({
-                  description_short: data.description_short || '',
-                  description_tone: data.description_tone || 'factuel',
-                  highlights: data.highlights || [],
-                });
+                setPresentationData((prev) => ({
+                  ...prev,
+                  ...(data.description_html !== undefined && { description_html: data.description_html }),
+                  ...(data.description_tone !== undefined && { description_tone: data.description_tone }),
+                  ...(data.highlights !== undefined && { highlights: data.highlights }),
+                }));
               }
             }}
             onGenerateWithAI={() => {
@@ -925,13 +1129,10 @@ export default function CircuitDetailPage() {
           {/* Additional Info */}
           <TripInfoEditor
             data={tripInfo}
-            onChange={(data) => setTripInfo({
-              info_general: data.info_general || '',
-              info_formalities: data.info_formalities || '',
-              info_booking_conditions: data.info_booking_conditions || '',
-              info_cancellation_policy: data.info_cancellation_policy || '',
-              info_additional: data.info_additional || '',
-            })}
+            onChange={(data) => setTripInfo((prev) => ({
+              ...prev,
+              ...data,
+            }))}
             onLoadDefaults={() => {
               // TODO: Load defaults from country templates
               console.log('Load info defaults');
@@ -974,6 +1175,7 @@ export default function CircuitDetailPage() {
             costNatures={costNatures}
             onRefetch={refetch}
             conditionsVersion={conditionsVersion}
+            vatMode={settingsData.vat_calculation_mode}
           />
 
           {/* Conditions panel — manage trip-level conditions */}
@@ -998,7 +1200,7 @@ export default function CircuitDetailPage() {
                     className="w-full flex items-center justify-between p-4 gap-3 cursor-pointer"
                   >
                     <div className="flex items-center gap-4 flex-1 min-w-0">
-                      <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
+                      <div className="w-10 h-10 rounded-full bg-[#E6F9FA] text-[#096D71] flex items-center justify-center font-bold text-xs flex-shrink-0">
                         {getDayBadge(day.day_number, day.day_number_end)}
                       </div>
                       <div className="text-left flex-1 min-w-0">
@@ -1007,7 +1209,7 @@ export default function CircuitDetailPage() {
                             type="text"
                             defaultValue={day.title || ''}
                             placeholder="Titre du jour..."
-                            className="font-semibold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-emerald-500 rounded px-1 -ml-1 flex-1 min-w-0"
+                            className="font-semibold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-[#0FB6BC] rounded px-1 -ml-1 flex-1 min-w-0"
                             onClick={(e) => e.stopPropagation()}
                             onBlur={(e) => {
                               if (e.target.value !== (day.title || '')) {
@@ -1021,7 +1223,7 @@ export default function CircuitDetailPage() {
                           {(() => {
                             const { dateLabel } = formatTripDayLabel(day.day_number, day.day_number_end, trip.start_date);
                             return dateLabel ? (
-                              <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">{dateLabel}</span>
+                              <span className="text-xs font-medium text-[#0C9296] bg-[#E6F9FA] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">{dateLabel}</span>
                             ) : null;
                           })()}
                         </div>
@@ -1192,7 +1394,7 @@ export default function CircuitDetailPage() {
                               await extendTripDay({ tripId: trip.id, dayId: day.id, delta: -1 });
                               refetch();
                             }}
-                            className="flex items-center justify-center w-7 h-7 text-xs text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-md transition-colors border border-gray-200 hover:border-orange-300"
+                            className="flex items-center justify-center w-7 h-7 text-xs text-gray-400 hover:text-[#DD9371] hover:bg-[#FDF5F2] rounded-md transition-colors border border-gray-200 hover:border-[#F3C3B1]"
                             title="Retirer un jour de ce bloc"
                           >
                             <Minus className="w-3.5 h-3.5" />
@@ -1204,7 +1406,7 @@ export default function CircuitDetailPage() {
                             await extendTripDay({ tripId: trip.id, dayId: day.id, delta: 1 });
                             refetch();
                           }}
-                          className="flex items-center justify-center w-7 h-7 text-xs text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors border border-gray-200 hover:border-emerald-300"
+                          className="flex items-center justify-center w-7 h-7 text-xs text-gray-400 hover:text-[#0C9296] hover:bg-[#E6F9FA] rounded-md transition-colors border border-gray-200 hover:border-[#99E7EB]"
                           title="Ajouter un jour à ce bloc"
                         >
                           <Plus className="w-3.5 h-3.5" />
@@ -1238,12 +1440,15 @@ export default function CircuitDetailPage() {
                             onActivityMealsChanged={handleActivityMealsChanged}
                             linkedAccommodation={getLinkedAccommodation(day.day_number)}
                             conditionsVersion={conditionsVersion}
+                            tripRoomDemand={roomDemand}
+                            vatMode={settingsData.vat_calculation_mode}
                           />
                         </div>
                         {/* Vignette photo à droite */}
                         {(() => {
                           const dayPhoto = tripPhotos?.find(p => p.day_number === day.day_number);
                           if (dayPhoto) {
+                            // Priority 1: TripPhoto specific to this day
                             return (
                               <div className="flex-shrink-0 w-36">
                                 <div className="relative group">
@@ -1280,6 +1485,29 @@ export default function CircuitDetailPage() {
                               </div>
                             );
                           }
+
+                          // Priority 2: Location photo (inherited from destination)
+                          const locPhoto = getLocationPhotoForDay(day);
+                          if (locPhoto) {
+                            return (
+                              <div className="flex-shrink-0 w-36">
+                                <div className="relative group">
+                                  <img
+                                    src={locPhoto.thumbnail_url || locPhoto.url}
+                                    alt={locPhoto.alt_text || day.location_name || day.title || `Jour ${day.day_number}`}
+                                    className="w-36 h-24 rounded-lg object-cover shadow-sm"
+                                    loading="lazy"
+                                  />
+                                  {/* Badge indicating this comes from the location */}
+                                  <span className="absolute bottom-1 left-1 text-[9px] bg-black/50 text-white px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                                    <MapPin className="w-2.5 h-2.5" />
+                                    {day.location_name || 'Location'}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          }
+
                           return null;
                         })()}
                       </div>
@@ -1303,7 +1531,7 @@ export default function CircuitDetailPage() {
                   await createTripDay({ tripId: trip.id, data: { day_number: maxDay + 1 } });
                   refetch();
                 }}
-                className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-emerald-500 hover:text-emerald-600 transition-colors flex items-center justify-center gap-2"
+                className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-[#0FB6BC] hover:text-[#0C9296] transition-colors flex items-center justify-center gap-2"
               >
                 <Plus className="w-5 h-5" />
                 Ajouter un jour
@@ -1323,7 +1551,7 @@ export default function CircuitDetailPage() {
                   await createTripDay({ tripId: trip.id, data: { day_number: 1 } });
                   refetch();
                 }}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                className="px-4 py-2 bg-[#0FB6BC] text-white rounded-lg hover:bg-[#0C9296] transition-colors"
               >
                 Ajouter un jour
               </button>
@@ -1343,7 +1571,7 @@ export default function CircuitDetailPage() {
         {!sourcePanelOpen && (
           <button
             onClick={() => setSourcePanelOpen(true)}
-            className="fixed right-6 bottom-6 w-12 h-12 bg-emerald-600 text-white rounded-full shadow-lg hover:bg-emerald-700 transition-colors flex items-center justify-center z-40"
+            className="fixed right-6 bottom-6 w-12 h-12 bg-[#0FB6BC] text-white rounded-full shadow-lg hover:bg-[#0C9296] transition-colors flex items-center justify-center z-40"
             title="Bibliothèque de blocs"
           >
             <Layers className="w-5 h-5" />
@@ -1352,16 +1580,124 @@ export default function CircuitDetailPage() {
         </CircuitDndProvider>
       )}
 
-      {activeTab === 'quotation' && (
+      {activeTab === 'roadbook' && (
+        <RoadbookEditor
+          trip={trip}
+          roadbookIntro={roadbookIntro}
+          onRoadbookIntroChange={setRoadbookIntro}
+        />
+      )}
+
+      {activeTab === 'cotations' && (
+        <CotationsTab tripId={trip.id} tripType={trip.type} tripRoomDemand={trip.room_demand_json} tripPaxConfigs={trip.pax_configs} />
+      )}
+
+      {activeTab === 'tarification' && (
         <div className="space-y-6">
           {/* Conditions panel — change conditions to see price impact */}
           <ConditionsPanel tripId={trip.id} onConditionsChanged={() => setConditionsVersion(v => v + 1)} />
+
+          {/* Context Banner — pax composition, conditions, cotation */}
+          {activeTarificationCotation?.results_json?.pax_configs && (
+            (() => {
+              const paxConfigs = activeTarificationCotation.results_json.pax_configs;
+              const isRange = (activeTarificationCotation.tarification_json?.mode || 'range_web') === 'range_web';
+              // Derive conditions from cotation's condition_selections (not trip-level)
+              const cotationSelections = activeTarificationCotation.condition_selections || {};
+              const activeConditions: { id: number; conditionName: string; label: string }[] = [];
+              Object.entries(cotationSelections).forEach(([condIdStr, optionId]) => {
+                const tripCond = tarificationConditions.find(tc => tc.condition_id === Number(condIdStr));
+                if (tripCond) {
+                  const opt = tripCond.options?.find(o => o.id === optionId);
+                  if (opt) activeConditions.push({ id: tripCond.id, conditionName: tripCond.condition_name, label: opt.label });
+                }
+              });
+
+              // Parse pax composition from first pax_config args
+              const firstConfig = paxConfigs[0];
+              const argsLabel = firstConfig?.args_label || '';
+
+              // Extract pax range for range_web mode
+              const paxValues = paxConfigs.map(p => p.total_pax).filter(Boolean);
+              const minPax = Math.min(...paxValues);
+              const maxPax = Math.max(...paxValues);
+
+              // Parse room composition from args (Record<string, number>)
+              const firstArgs = firstConfig?.args || {};
+              const roomParts: string[] = [];
+              const paxParts: string[] = [];
+              Object.entries(firstArgs).forEach(([key, val]) => {
+                if (key.startsWith('room_')) {
+                  roomParts.push(`${val} ${key.replace('room_', '')}`);
+                } else if (key === 'adult' && val > 0) {
+                  paxParts.push(`${val} adulte${val > 1 ? 's' : ''}`);
+                } else if (key === 'child' && val > 0) {
+                  paxParts.push(`${val} enfant${val > 1 ? 's' : ''}`);
+                }
+              });
+
+              return (
+                <div className="bg-nomadays-turquoise-light border border-primary/15 rounded-xl p-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Pax composition */}
+                    <div className="flex items-center gap-1.5 bg-white rounded-full px-3 py-1.5 text-sm border border-gray-200">
+                      <Users className="w-4 h-4 text-primary" />
+                      {isRange ? (
+                        <span className="text-gray-700 font-medium">{minPax} à {maxPax} participants</span>
+                      ) : (
+                        <span className="text-gray-700 font-medium">
+                          {paxParts.length > 0 ? paxParts.join(' + ') : argsLabel || `${firstConfig?.total_pax || '?'} pers`}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Room composition (non-range mode) */}
+                    {!isRange && roomParts.length > 0 && (
+                      <div className="flex items-center gap-1.5 bg-white rounded-full px-3 py-1.5 text-sm border border-gray-200">
+                        <BedDouble className="w-4 h-4 text-blue-500" />
+                        <span className="text-gray-700">{roomParts.join(' + ')}</span>
+                      </div>
+                    )}
+
+                    {/* Active conditions (cotation-specific) */}
+                    {activeConditions.map(cond => (
+                      <div key={cond.id} className="flex items-center gap-1.5 bg-white rounded-full px-3 py-1.5 text-sm border border-gray-200">
+                        <Star className="w-3.5 h-3.5 text-secondary" />
+                        <span className="text-gray-500">{cond.conditionName} :</span>
+                        <span className="text-gray-700 font-medium">{cond.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()
+          )}
+
+          {/* Cotation pills selector */}
+          {tarificationCotations.filter(c => c.status === 'calculated').length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-500 mr-1">Cotation :</span>
+              {tarificationCotations.filter(c => c.status === 'calculated').map(cotation => (
+                <button
+                  key={cotation.id}
+                  onClick={() => setTarificationCotationId(cotation.id)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all ${
+                    activeTarificationCotation?.id === cotation.id
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <span>{cotation.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Paramètres de tarification (rappel) */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                <DollarSign className="w-4 h-4 text-emerald-600" />
+                <DollarSign className="w-4 h-4 text-primary" />
                 Paramètres de tarification
               </h3>
               <button
@@ -1393,6 +1729,11 @@ export default function CircuitDetailPage() {
                   <span className="text-gray-400 ml-1">({settingsData.vat_calculation_mode === 'on_margin' ? 'sur marge' : 'sur PV'})</span>
                 </span>
               )}
+              {exchangeRateValue && parseFloat(exchangeRateValue) > 0 && settingsData.destination_country && (
+                <span className="text-gray-600">
+                  Taux : <span className="font-medium">1 {settingsData.default_currency} = {exchangeRateValue} {getLocalCurrency(settingsData.destination_country)}</span>
+                </span>
+              )}
             </div>
 
             {/* Détail éditable (collapsible) */}
@@ -1407,7 +1748,7 @@ export default function CircuitDetailPage() {
                     <select
                       value={settingsData.default_currency}
                       onChange={(e) => setSettingsData(prev => ({ ...prev, default_currency: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0FB6BC] bg-white"
                     >
                       <option value="EUR">EUR (€)</option>
                       <option value="USD">USD ($)</option>
@@ -1424,7 +1765,7 @@ export default function CircuitDetailPage() {
                         type="number"
                         value={settingsData.margin_pct}
                         onChange={(e) => setSettingsData(prev => ({ ...prev, margin_pct: parseFloat(e.target.value) || 0 }))}
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                       />
                       <Percent className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
                     </div>
@@ -1436,7 +1777,7 @@ export default function CircuitDetailPage() {
                     <select
                       value={settingsData.margin_type}
                       onChange={(e) => setSettingsData(prev => ({ ...prev, margin_type: e.target.value as 'margin' | 'markup' }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0FB6BC] bg-white"
                     >
                       <option value="margin">Marge (sur PV)</option>
                       <option value="markup">Markup (sur PA)</option>
@@ -1456,14 +1797,14 @@ export default function CircuitDetailPage() {
                           value={settingsData.primary_commission_label}
                           onChange={(e) => setSettingsData(prev => ({ ...prev, primary_commission_label: e.target.value }))}
                           placeholder="Libellé"
-                          className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                         />
                         <div className="relative w-20">
                           <input
                             type="number"
                             value={settingsData.primary_commission_pct}
                             onChange={(e) => setSettingsData(prev => ({ ...prev, primary_commission_pct: parseFloat(e.target.value) || 0 }))}
-                            className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                            className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                           />
                           <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
                         </div>
@@ -1477,14 +1818,14 @@ export default function CircuitDetailPage() {
                           value={settingsData.secondary_commission_label}
                           onChange={(e) => setSettingsData(prev => ({ ...prev, secondary_commission_label: e.target.value }))}
                           placeholder="Libellé"
-                          className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                         />
                         <div className="relative w-20">
                           <input
                             type="number"
                             value={settingsData.secondary_commission_pct}
                             onChange={(e) => setSettingsData(prev => ({ ...prev, secondary_commission_pct: parseFloat(e.target.value) || 0 }))}
-                            className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                            className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                           />
                           <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
                         </div>
@@ -1493,47 +1834,25 @@ export default function CircuitDetailPage() {
                   </div>
                 </div>
 
-                {/* TVA */}
+                {/* TVA (read-only — configuré dans Configuration) */}
                 <div>
-                  <h4 className="text-xs font-medium text-gray-500 mb-2">TVA</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Taux de TVA</label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          value={settingsData.vat_pct}
-                          onChange={(e) => setSettingsData(prev => ({ ...prev, vat_pct: parseFloat(e.target.value) || 0 }))}
-                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
-                      </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h4 className="text-xs font-medium text-gray-500">TVA</h4>
+                    <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">Configuration</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={settingsData.vat_pct}
+                        readOnly
+                        className="w-24 px-3 py-2 border border-gray-100 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-not-allowed"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
                     </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Mode de calcul</label>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setSettingsData(prev => ({ ...prev, vat_calculation_mode: 'on_margin' }))}
-                          className={`flex-1 py-2 px-3 rounded-lg border-2 text-xs transition-colors ${
-                            settingsData.vat_calculation_mode === 'on_margin'
-                              ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                              : 'border-gray-200 hover:border-gray-300'
-                          }`}
-                        >
-                          Sur la marge
-                        </button>
-                        <button
-                          onClick={() => setSettingsData(prev => ({ ...prev, vat_calculation_mode: 'on_selling_price' }))}
-                          className={`flex-1 py-2 px-3 rounded-lg border-2 text-xs transition-colors ${
-                            settingsData.vat_calculation_mode === 'on_selling_price'
-                              ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                              : 'border-gray-200 hover:border-gray-300'
-                          }`}
-                        >
-                          Sur prix vente agence
-                        </button>
-                      </div>
-                    </div>
+                    <span className="text-xs text-gray-400">
+                      {settingsData.vat_calculation_mode === 'on_margin' ? 'sur marge' : 'sur PV'}
+                    </span>
                   </div>
                 </div>
 
@@ -1541,7 +1860,7 @@ export default function CircuitDetailPage() {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="text-xs font-medium text-gray-500">Taux de change</h4>
-                    <button className="inline-flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-700">
+                    <button className="inline-flex items-center gap-1 text-xs text-[#0FB6BC] hover:text-[#0C9296]">
                       <RefreshCw className="w-3 h-3" />
                       Actualiser
                     </button>
@@ -1556,6 +1875,8 @@ export default function CircuitDetailPage() {
                       <input
                         type="number"
                         step="0.01"
+                        value={exchangeRateValue}
+                        onChange={(e) => setExchangeRateValue(e.target.value)}
                         placeholder={
                           settingsData.destination_country === 'TH' ? '37.50' :
                           settingsData.destination_country === 'VN' ? '26500' :
@@ -1565,18 +1886,10 @@ export default function CircuitDetailPage() {
                           settingsData.destination_country === 'IN' ? '91' :
                           '1.00'
                         }
-                        className="w-28 px-3 py-1.5 border border-gray-200 rounded-lg text-right text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        className="w-28 px-3 py-1.5 border border-gray-200 rounded-lg text-right text-sm focus:outline-none focus:ring-2 focus:ring-[#0FB6BC]"
                       />
                       <span className="text-sm font-medium text-gray-600 w-12">
-                        {settingsData.destination_country === 'TH' ? 'THB' :
-                         settingsData.destination_country === 'VN' ? 'VND' :
-                         settingsData.destination_country === 'JP' ? 'JPY' :
-                         settingsData.destination_country === 'ID' ? 'IDR' :
-                         settingsData.destination_country === 'MA' ? 'MAD' :
-                         settingsData.destination_country === 'IN' ? 'INR' :
-                         settingsData.destination_country === 'CN' ? 'CNY' :
-                         settingsData.destination_country === 'KH' ? 'USD' :
-                         'USD'}
+                        {getLocalCurrency(settingsData.destination_country)}
                       </span>
                     </div>
                   </div>
@@ -1585,9 +1898,46 @@ export default function CircuitDetailPage() {
             )}
           </div>
 
-        <div className="grid grid-cols-12 gap-6">
-          {/* Left: Cost Types Navigation + Items */}
-          <div className="col-span-8 space-y-4">
+          {/* Tarification Panel — reverse margin from selling price */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+            <div className="mb-4">
+              <h3 className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                <DollarSign className="w-4 h-4 text-primary" />
+                Tarification client
+              </h3>
+            </div>
+
+            {tarificationCotations.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <Calculator className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                <p className="text-sm mb-1">Aucune cotation disponible</p>
+                <p className="text-xs text-gray-400">
+                  Créez et calculez une cotation dans l&apos;onglet « Cotations » pour accéder à la tarification.
+                </p>
+              </div>
+            ) : !tarificationCotations.some(c => c.status === 'calculated') ? (
+              <div className="text-center py-8 text-gray-500">
+                <AlertTriangle className="w-8 h-8 mx-auto mb-2 text-amber-400" />
+                <p className="text-sm mb-1">Aucune cotation calculée</p>
+                <p className="text-xs text-gray-400">
+                  Lancez le calcul d&apos;une cotation pour pouvoir saisir la tarification.
+                </p>
+              </div>
+            ) : activeTarificationCotation ? (
+              <TarificationPanel
+                cotation={activeTarificationCotation}
+                currency={settingsData.default_currency}
+                localCurrency={settingsData.destination_country ? getLocalCurrency(settingsData.destination_country) : undefined}
+                exchangeRate={exchangeRateValue && parseFloat(exchangeRateValue) > 0 ? (1 / parseFloat(exchangeRateValue)) : undefined}
+                tripType={trip.type}
+                onSaved={() => refetchTarificationCotations()}
+              />
+            ) : null}
+          </div>
+
+        <div>
+          {/* Cost Types Navigation + Items (full-width) */}
+          <div className="space-y-4">
             {/* Formula Selection + View Toggle */}
             <div className="flex items-center justify-between mb-2">
               {/* Formula Selection (compact) */}
@@ -1601,7 +1951,7 @@ export default function CircuitDetailPage() {
                         onClick={() => setSelectedFormula(formula.id)}
                         className={`px-3 py-1 rounded-full text-sm transition-colors ${
                           selectedFormula === formula.id
-                            ? 'bg-emerald-600 text-white'
+                            ? 'bg-[#0FB6BC] text-white'
                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                         }`}
                       >
@@ -1620,18 +1970,18 @@ export default function CircuitDetailPage() {
                   onClick={() => setQuotationView('by-type')}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
                     quotationView === 'by-type'
-                      ? 'bg-white text-emerald-700 shadow-sm font-medium'
+                      ? 'bg-white text-[#096D71] shadow-sm font-medium'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
-                  <span className="w-3 h-3 rounded-full bg-gradient-to-r from-blue-500 via-purple-500 to-emerald-500" />
+                  <span className="w-3 h-3 rounded-full bg-gradient-to-r from-[#0FB6BC] via-[#DD9371] to-[#8BA080]" />
                   Par type
                 </button>
                 <button
                   onClick={() => setQuotationView('by-day')}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
                     quotationView === 'by-day'
-                      ? 'bg-white text-emerald-700 shadow-sm font-medium'
+                      ? 'bg-white text-[#096D71] shadow-sm font-medium'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
@@ -1658,7 +2008,7 @@ export default function CircuitDetailPage() {
                         onClick={() => setSelectedCostNature && setSelectedCostNature(nature.code)}
                         className={`flex-1 px-4 py-3 text-center transition-colors relative ${
                           (selectedCostNature || 'HTL') === nature.code
-                            ? 'bg-white text-emerald-700 font-medium'
+                            ? 'bg-white text-[#096D71] font-medium'
                             : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                         }`}
                       >
@@ -1667,7 +2017,7 @@ export default function CircuitDetailPage() {
                             nature.code === 'HTL' ? 'bg-blue-500' :
                             nature.code === 'GDE' ? 'bg-purple-500' :
                             nature.code === 'TRS' ? 'bg-orange-500' :
-                            nature.code === 'ACT' ? 'bg-emerald-500' :
+                            nature.code === 'ACT' ? 'bg-[#0FB6BC]' :
                             nature.code === 'RES' ? 'bg-red-500' :
                             'bg-gray-500'
                           }`} />
@@ -1677,7 +2027,7 @@ export default function CircuitDetailPage() {
                           )}
                         </div>
                         {(selectedCostNature || 'HTL') === nature.code && (
-                          <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-600" />
+                          <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#0FB6BC]" />
                         )}
                       </button>
                     );
@@ -1702,7 +2052,7 @@ export default function CircuitDetailPage() {
                               setEditingItem(undefined);
                               setShowItemEditor(true);
                             }}
-                            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm"
+                            className="px-4 py-2 bg-[#0FB6BC] text-white rounded-lg hover:bg-[#0C9296] text-sm"
                           >
                             Ajouter
                           </button>
@@ -1775,7 +2125,7 @@ export default function CircuitDetailPage() {
                             setEditingItem(undefined);
                             setShowItemEditor(true);
                           }}
-                          className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-emerald-500 hover:text-emerald-600 transition-colors flex items-center justify-center gap-2 text-sm"
+                          className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-[#0FB6BC] hover:text-[#0C9296] transition-colors flex items-center justify-center gap-2 text-sm"
                         >
                           <Plus className="w-4 h-4" />
                           Ajouter une prestation
@@ -1808,7 +2158,7 @@ export default function CircuitDetailPage() {
                             setEditingItem(undefined);
                             setShowItemEditor(true);
                           }}
-                          className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm"
+                          className="px-4 py-2 bg-[#0FB6BC] text-white rounded-lg hover:bg-[#0C9296] text-sm"
                         >
                           Ajouter une prestation
                         </button>
@@ -1827,7 +2177,7 @@ export default function CircuitDetailPage() {
                         case 'HTL': return 'bg-blue-500';
                         case 'GDE': return 'bg-purple-500';
                         case 'TRS': return 'bg-orange-500';
-                        case 'ACT': return 'bg-emerald-500';
+                        case 'ACT': return 'bg-[#0FB6BC]';
                         case 'RES': return 'bg-red-500';
                         default: return 'bg-gray-500';
                       }
@@ -1838,7 +2188,7 @@ export default function CircuitDetailPage() {
                         {/* Day Header */}
                         <div className="flex items-center justify-between p-4 bg-gray-50 border-b border-gray-100">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm">
+                            <div className="w-10 h-10 rounded-full bg-[#E6F9FA] text-[#096D71] flex items-center justify-center font-bold text-sm">
                               J{dayNumber}
                             </div>
                             <div>
@@ -1930,7 +2280,7 @@ export default function CircuitDetailPage() {
                               setEditingItem({ day_start: dayNumber, day_end: dayNumber });
                               setShowItemEditor(true);
                             }}
-                            className="w-full mt-2 py-2 border-2 border-dashed border-gray-200 rounded-lg text-gray-400 hover:border-emerald-500 hover:text-emerald-600 transition-colors flex items-center justify-center gap-2 text-sm"
+                            className="w-full mt-2 py-2 border-2 border-dashed border-gray-200 rounded-lg text-gray-400 hover:border-[#0FB6BC] hover:text-[#0C9296] transition-colors flex items-center justify-center gap-2 text-sm"
                           >
                             <Plus className="w-4 h-4" />
                             Ajouter au Jour {dayNumber}
@@ -1958,173 +2308,6 @@ export default function CircuitDetailPage() {
             )}
           </div>
 
-          {/* Right: Tarification Module */}
-          <div className="col-span-4 space-y-4">
-            {/* PAX Selection */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <h3 className="text-sm font-medium text-gray-700 mb-3">Voyageurs</h3>
-              <div className="grid grid-cols-3 gap-2">
-                {defaultPaxConfigs.map(config => (
-                  <button
-                    key={config.pax}
-                    onClick={() => setSelectedPax(config.pax)}
-                    className={`py-3 rounded-lg border-2 transition-all ${
-                      selectedPax === config.pax
-                        ? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-sm'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="text-lg font-bold">{config.pax}</div>
-                    <div className="text-xs text-gray-500">{config.rooms} chb</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Tarification Summary */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
-                <Calculator className="w-4 h-4 text-emerald-600" />
-                Tarification
-              </h3>
-
-              {quotationResult ? (
-                <div className="space-y-3">
-                  {/* Cost breakdown by type */}
-                  <div className="space-y-2 pb-3 border-b border-gray-100">
-                    {costNatures.map(nature => {
-                      const items = currentFormula?.items?.filter(
-                        item => (item.cost_nature?.code || 'MIS') === nature.code
-                      ) || [];
-                      if (items.length === 0) return null;
-
-                      let total = 0;
-                      items.forEach(item => {
-                        let cost = item.unit_cost * item.quantity;
-                        if (item.ratio_rule === 'per_person') cost *= selectedPax;
-                        else if (item.ratio_rule === 'per_room') cost *= (defaultPaxConfigs.find(c => c.pax === selectedPax)?.rooms || 1);
-                        total += cost;
-                      });
-
-                      return (
-                        <div key={nature.code} className="flex justify-between text-sm">
-                          <span className="text-gray-500 flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full ${
-                              nature.code === 'HTL' ? 'bg-blue-500' :
-                              nature.code === 'GDE' ? 'bg-purple-500' :
-                              nature.code === 'TRS' ? 'bg-orange-500' :
-                              nature.code === 'ACT' ? 'bg-emerald-500' :
-                              nature.code === 'RES' ? 'bg-red-500' :
-                              'bg-gray-500'
-                            }`} />
-                            {nature.label || nature.name}
-                          </span>
-                          <span className="font-medium">{total.toFixed(2)} €</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Totals */}
-                  <div className="flex justify-between text-sm font-medium">
-                    <span className="text-gray-700">Coût total</span>
-                    <span>{quotationResult.total_cost.toFixed(2)} €</span>
-                  </div>
-
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Marge ({trip.margin_pct}%)</span>
-                    <span className="text-emerald-600 font-medium">
-                      +{quotationResult.margin_amount.toFixed(2)} €
-                    </span>
-                  </div>
-
-                  {settingsData.primary_commission_pct > 0 && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-500">
-                        {settingsData.primary_commission_label} ({settingsData.primary_commission_pct}%)
-                      </span>
-                      <span className="text-orange-600 font-medium">
-                        -{(quotationResult.total_selling * settingsData.primary_commission_pct / 100).toFixed(2)} €
-                      </span>
-                    </div>
-                  )}
-
-                  {settingsData.vat_pct > 0 && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-500">
-                        TVA {settingsData.vat_pct}%
-                      </span>
-                      <span className="text-gray-600">
-                        {settingsData.vat_calculation_mode === 'on_margin'
-                          ? (quotationResult.margin_amount * settingsData.vat_pct / 100).toFixed(2)
-                          : ((quotationResult.total_selling - (quotationResult.total_selling * settingsData.primary_commission_pct / 100)) * settingsData.vat_pct / 100).toFixed(2)
-                        } €
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="pt-3 border-t border-gray-200">
-                    <div className="flex justify-between items-baseline">
-                      <span className="font-medium text-gray-700">Prix de vente</span>
-                      <span className="text-xl font-bold text-gray-900">
-                        {quotationResult.total_selling.toFixed(2)} €
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="bg-emerald-50 rounded-lg p-4 text-center">
-                    <div className="text-sm text-emerald-600 mb-1">Prix par personne</div>
-                    <div className="text-3xl font-bold text-emerald-700">
-                      {quotationResult.price_per_person.toFixed(0)} €
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-6 text-gray-500">
-                  <Calculator className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                  <p className="text-sm">Ajoutez des prestations pour calculer le tarif</p>
-                </div>
-              )}
-            </div>
-
-            {/* Cost Breakdown Chart */}
-            {currentFormula && currentFormula.items && currentFormula.items.length > 0 && (
-              <CostBreakdown
-                formula={currentFormula}
-                pax={selectedPax}
-                rooms={defaultPaxConfigs.find(c => c.pax === selectedPax)?.rooms || 1}
-                currency={trip.default_currency || 'EUR'}
-              />
-            )}
-
-            {/* Alerts */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <h3 className="text-sm font-medium text-gray-500 mb-3">Alertes</h3>
-              <div className="space-y-2">
-                {quotationResult && quotationResult.margin_pct < 20 && (
-                  <div className="flex items-start gap-2 text-sm">
-                    <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                    <span className="text-gray-600">
-                      Marge faible ({quotationResult.margin_pct.toFixed(1)}%)
-                    </span>
-                  </div>
-                )}
-                {(!currentFormula?.items || currentFormula.items.length === 0) && (
-                  <div className="flex items-start gap-2 text-sm">
-                    <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                    <span className="text-gray-600">Aucune prestation</span>
-                  </div>
-                )}
-                {currentFormula?.items && currentFormula.items.length > 0 && quotationResult && quotationResult.margin_pct >= 20 && (
-                  <div className="flex items-start gap-2 text-sm">
-                    <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
-                    <span className="text-gray-600">Cotation valide</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
           {/* Item Editor Modal */}
           {showItemEditor && (
             <ItemEditor
@@ -2148,6 +2331,28 @@ export default function CircuitDetailPage() {
         </div>
       )}
 
+
+      {/* Pre-Booking Dialog */}
+      <PreBookingDialog
+        isOpen={showPreBookingDialog}
+        onClose={() => setShowPreBookingDialog(false)}
+        tripId={trip.id}
+        tripName={trip.name}
+        paxCount={trip.pax_configs?.[0]?.total_pax || undefined}
+        onCreated={() => setShowPreBookingDialog(false)}
+      />
+
+      {/* Select for Dossier Dialog */}
+      <SelectCircuitDialog
+        open={showSelectForDossier}
+        onOpenChange={setShowSelectForDossier}
+        trips={[trip]}
+        preSelectedTripId={trip.id}
+        onSuccess={() => {
+          setShowSelectForDossier(false);
+          refetch();
+        }}
+      />
 
       {/* Translation Modal */}
       {showTranslateModal && (
@@ -2188,7 +2393,7 @@ export default function CircuitDetailPage() {
                       <div
                         key={t.id}
                         className={`flex items-center justify-between p-3 rounded-lg ${
-                          t.is_original ? 'bg-emerald-50 border border-emerald-200' : 'bg-gray-50'
+                          t.is_original ? 'bg-[#E6F9FA] border border-[#99E7EB]' : 'bg-gray-50'
                         }`}
                       >
                         <div className="flex items-center gap-3">
@@ -2334,7 +2539,7 @@ export default function CircuitDetailPage() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <RefreshCw className="w-5 h-5 text-emerald-600" />
+              <RefreshCw className="w-5 h-5 text-[#0FB6BC]" />
               Regénérer la photo — Jour {regenerateDayNumber}
             </DialogTitle>
             <DialogDescription>
@@ -2351,7 +2556,7 @@ export default function CircuitDetailPage() {
                 value={regeneratePrompt}
                 onChange={(e) => setRegeneratePrompt(e.target.value)}
                 placeholder="Décrivez l'image souhaitée..."
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none text-sm"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0FB6BC] resize-none text-sm"
                 rows={6}
               />
               <p className="mt-1 text-xs text-gray-400">
@@ -2384,7 +2589,7 @@ export default function CircuitDetailPage() {
                 }
               }}
               disabled={regenerating}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-[#0FB6BC] text-white rounded-lg hover:bg-[#0C9296] transition-colors disabled:opacity-50 text-sm"
             >
               {regenerating ? (
                 <>

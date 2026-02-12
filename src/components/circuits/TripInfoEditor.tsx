@@ -6,10 +6,11 @@ import { Info, ChevronDown, ChevronUp, FileText, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Textarea } from '@/components/ui/textarea';
+import { RichTextEditor } from '@/components/editor';
 
 interface TripInfoField {
   key: string;
+  htmlKey: string; // Rich text HTML field key
   label: string;
   placeholder: string;
   description?: string;
@@ -19,30 +20,35 @@ interface TripInfoField {
 const INFO_FIELDS: TripInfoField[] = [
   {
     key: 'info_general',
+    htmlKey: 'info_general_html',
     label: 'Informations générales',
     placeholder: 'Décrivez les informations générales sur le voyage...',
     description: 'Informations pratiques sur le voyage',
   },
   {
     key: 'info_formalities',
+    htmlKey: 'info_formalities_html',
     label: 'Formalités administratives',
     placeholder: 'Passeport, visa, vaccinations...',
     description: 'Conditions d\'entrée et santé',
   },
   {
     key: 'info_booking_conditions',
+    htmlKey: 'info_booking_conditions_html',
     label: 'Conditions de réservation',
     placeholder: 'Modalités de réservation et de paiement...',
     description: 'Acompte, solde, délais',
   },
   {
     key: 'info_cancellation_policy',
+    htmlKey: 'info_cancellation_policy_html',
     label: 'Conditions d\'annulation',
     placeholder: 'Politique d\'annulation et remboursement...',
     description: 'Frais et délais d\'annulation',
   },
   {
     key: 'info_additional',
+    htmlKey: 'info_additional_html',
     label: 'Informations supplémentaires',
     placeholder: 'Autres informations importantes...',
     description: 'Optionnel',
@@ -56,6 +62,12 @@ interface TripInfoData {
   info_booking_conditions?: string;
   info_cancellation_policy?: string;
   info_additional?: string;
+  // Rich text HTML versions
+  info_general_html?: string;
+  info_formalities_html?: string;
+  info_booking_conditions_html?: string;
+  info_cancellation_policy_html?: string;
+  info_additional_html?: string;
 }
 
 interface TripInfoEditorProps {
@@ -69,6 +81,7 @@ interface TripInfoEditorProps {
 /**
  * Trip Information Editor component.
  * Accordion-style editor for the 5 information fields.
+ * Uses RichTextEditor (Tiptap) in compact mode.
  */
 export function TripInfoEditor({
   data = {},
@@ -91,8 +104,8 @@ export function TripInfoEditor({
     });
   };
 
-  const handleFieldChange = (key: string, value: string) => {
-    onChange({ ...data, [key]: value });
+  const handleFieldHtmlChange = (htmlKey: string, html: string) => {
+    onChange({ ...data, [htmlKey]: html });
   };
 
   const expandAll = () => {
@@ -107,8 +120,17 @@ export function TripInfoEditor({
     return (data as Record<string, string>)[key] || '';
   };
 
+  const getHtmlFieldValue = (htmlKey: string, fallbackKey: string): string => {
+    return (data as Record<string, string>)[htmlKey] || (data as Record<string, string>)[fallbackKey] || '';
+  };
+
+  // Count based on HTML fields having content, with fallback to plain text
   const filledCount = INFO_FIELDS.filter(
-    (field) => getFieldValue(field.key).trim().length > 0
+    (field) => {
+      const html = getFieldValue(field.htmlKey);
+      const plain = getFieldValue(field.key);
+      return (html && html.trim().length > 0 && html !== '<p></p>') || (plain && plain.trim().length > 0);
+    }
   ).length;
 
   return (
@@ -154,8 +176,9 @@ export function TripInfoEditor({
       <CardContent className="space-y-2">
         {INFO_FIELDS.map((field) => {
           const isExpanded = expandedFields.has(field.key);
-          const value = getFieldValue(field.key);
-          const hasContent = value.trim().length > 0;
+          const htmlValue = getFieldValue(field.htmlKey);
+          const plainValue = getFieldValue(field.key);
+          const hasContent = (htmlValue && htmlValue.trim().length > 0 && htmlValue !== '<p></p>') || (plainValue && plainValue.trim().length > 0);
 
           return (
             <div
@@ -187,7 +210,7 @@ export function TripInfoEditor({
                     </div>
                     {!isExpanded && hasContent && (
                       <div className="text-xs text-gray-500 truncate max-w-md">
-                        {value.slice(0, 80)}...
+                        {(plainValue || '').slice(0, 80)}...
                       </div>
                     )}
                   </div>
@@ -199,18 +222,17 @@ export function TripInfoEditor({
                 )}
               </button>
 
-              {/* Content */}
+              {/* Content — Rich Text Editor (compact) */}
               {isExpanded && (
                 <div className="px-3 pb-3">
                   {field.description && (
                     <p className="text-xs text-gray-500 mb-2">{field.description}</p>
                   )}
-                  <Textarea
-                    value={value}
-                    onChange={(e) => handleFieldChange(field.key, e.target.value)}
+                  <RichTextEditor
+                    content={getHtmlFieldValue(field.htmlKey, field.key)}
+                    onChange={(html) => handleFieldHtmlChange(field.htmlKey, html)}
                     placeholder={field.placeholder}
-                    rows={5}
-                    className="resize-none text-sm"
+                    compact
                   />
                 </div>
               )}

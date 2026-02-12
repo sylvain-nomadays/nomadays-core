@@ -6,7 +6,7 @@ import { AccommodationBlock } from './AccommodationBlock';
 import { useTripConditions } from '@/hooks/useConditions';
 import { useDeleteBlock } from '@/hooks/useBlocks';
 import { findActiveVariant, getVariantOptionLabel } from '@/lib/conditionUtils';
-import type { Formula, CostNature, TripCondition, ConditionOption } from '@/lib/api/types';
+import type { Formula, CostNature, TripCondition, ConditionOption, RoomDemandEntry } from '@/lib/api/types';
 import type { AccommodationInfo } from './DayBlockList';
 
 interface AccommodationVariantGroupProps {
@@ -27,6 +27,8 @@ interface AccommodationVariantGroupProps {
   onAccommodationLoaded?: (dayNumber: number, info: AccommodationInfo | null) => void;
   /** Called when user wants to add a new variant */
   onAddVariant?: (conditionId: number, optionId: number) => void;
+  /** Trip-level room demand (passed through to AccommodationBlock) */
+  tripRoomDemand?: RoomDemandEntry[];
 }
 
 export function AccommodationVariantGroup({
@@ -40,6 +42,7 @@ export function AccommodationVariantGroup({
   tripStartDate,
   onRefetch,
   onAddVariant,
+  tripRoomDemand,
 }: AccommodationVariantGroupProps) {
   const { update: updateTripCondition } = useTripConditions(tripId);
   const { mutate: deleteBlock } = useDeleteBlock();
@@ -194,6 +197,7 @@ export function AccommodationVariantGroup({
             dayNumber={dayNumber}
             locationHint={locationHint}
             tripStartDate={tripStartDate}
+            tripRoomDemand={tripRoomDemand}
             conditionOptionId={
               (activeVariant.items || [])[0]?.condition_option_id ?? null
             }

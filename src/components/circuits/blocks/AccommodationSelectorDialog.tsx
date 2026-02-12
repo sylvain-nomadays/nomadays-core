@@ -16,10 +16,12 @@ import { useCreateSupplier } from '@/hooks/useSuppliers';
 import {
   resolveSeasonForDate,
   buildRateMap,
+  buildRateMapByBedType,
   getTripDayDate,
   formatRate,
 } from '@/lib/seasonMatcher';
-import type { Accommodation, RoomCategory, RoomRate } from '@/lib/api/types';
+import { BED_TYPE_LABELS } from '@/components/circuits/RoomDemandEditor';
+import type { Accommodation, RoomCategory, RoomRate, RoomDemandEntry, RoomBedType } from '@/lib/api/types';
 
 interface AccommodationSelectorDialogProps {
   open: boolean;
@@ -38,6 +40,8 @@ interface AccommodationSelectorDialogProps {
     roomCategory: RoomCategory;
     resolvedRate?: RoomRate;
   }) => void;
+  /** Room demand for allocation preview (trip-level or custom) */
+  tripRoomDemand?: RoomDemandEntry[];
   /** @deprecated Use inline creation instead. Kept for backwards compatibility. */
   onCreateHotel?: () => void;
 }
@@ -56,6 +60,7 @@ export function AccommodationSelectorDialog({
   tripStartDate,
   dayNumber,
   onSelect,
+  tripRoomDemand,
 }: AccommodationSelectorDialogProps) {
   const [step, setStep] = useState<'hotel' | 'room' | 'create'>('hotel');
   const [selectedHotel, setSelectedHotel] = useState<Accommodation | null>(null);
@@ -96,6 +101,14 @@ export function AccommodationSelectorDialog({
     return buildRateMap(hotelRates, seasonId);
   }, [hotelRates, selectedHotel, tripStartDate, dayNumber]);
 
+  // Resolve season ID once
+  const resolvedSeasonId = useMemo(() => {
+    if (!selectedHotel) return null;
+    const dayDate = getTripDayDate(tripStartDate, dayNumber ?? 1);
+    const seasons = selectedHotel.seasons || [];
+    return dayDate ? resolveSeasonForDate(seasons, dayDate) : null;
+  }, [selectedHotel, tripStartDate, dayNumber]);
+
   // Get active room categories for selected hotel
   const activeRoomCategories = useMemo(() => {
     if (!selectedHotel?.room_categories) return [];
@@ -103,6 +116,30 @@ export function AccommodationSelectorDialog({
       .filter(rc => rc.is_active)
       .sort((a, b) => a.sort_order - b.sort_order);
   }, [selectedHotel]);
+
+  // Build per-bed-type rate maps for allocation preview
+  const bedTypeRateMaps = useMemo(() => {
+    const maps = new Map<number, Map<string, RoomRate>>();
+    if (!hotelRates?.length || !selectedHotel) return maps;
+    for (const rc of activeRoomCategories) {
+      maps.set(rc.id, buildRateMapByBedType(hotelRates, resolvedSeasonId, rc.id));
+    }
+    return maps;
+  }, [hotelRates, selectedHotel, activeRoomCategories, resolvedSeasonId]);
+
+  // Check allocation compatibility for each room category
+  const getAllocationPreview = useCallback((room: RoomCategory) => {
+    if (!tripRoomDemand?.length) return null;
+    const availableBeds = room.available_bed_types || [];
+    const ratesByBed = bedTypeRateMaps.get(room.id) || new Map();
+
+    return tripRoomDemand.map(demand => ({
+      bed_type: demand.bed_type,
+      qty: demand.qty,
+      supported: availableBeds.length === 0 || availableBeds.includes(demand.bed_type),
+      rate: ratesByBed.get(demand.bed_type),
+    }));
+  }, [tripRoomDemand, bedTypeRateMaps]);
 
   // ─── Create hotel form state ────────────────────────────────────────
   const [createForm, setCreateForm] = useState({
@@ -392,45 +429,80 @@ export function AccommodationSelectorDialog({
                 <div className="space-y-1">
                   {activeRoomCategories.map((room) => {
                     const rateText = formatRate(dialogRateMap.get(room.id));
+                    const preview = getAllocationPreview(room);
+                    const hasUnsupported = preview?.some(p => !p.supported) ?? false;
+
                     return (
                       <button
                         key={room.id}
                         onClick={() => handleSelectRoom(room)}
-                        className="w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left hover:bg-gray-50 border border-transparent hover:border-gray-200 transition-colors"
+                        className={`w-full flex flex-col gap-1 px-3 py-3 rounded-lg text-left hover:bg-gray-50 border transition-colors ${
+                          hasUnsupported
+                            ? 'border-orange-200 bg-orange-50/30 hover:bg-orange-50/50'
+                            : 'border-transparent hover:border-gray-200'
+                        }`}
                       >
-                        {/* Room icon */}
-                        <div className="w-10 h-10 rounded-lg bg-amber-50 flex-shrink-0 flex items-center justify-center">
-                          <Bed className="w-5 h-5 text-amber-600" />
-                        </div>
-
-                        {/* Room info */}
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm font-medium text-gray-900">
-                            {room.name}
-                          </span>
-                          <div className="flex items-center gap-3 mt-0.5">
-                            <span className="flex items-center gap-1 text-xs text-gray-500">
-                              <Users className="w-3 h-3" />
-                              {room.max_occupancy} pers. max
-                            </span>
-                            {room.available_bed_types?.length > 0 && (
-                              <span className="text-xs text-gray-400">
-                                {room.available_bed_types.join('/')}
-                              </span>
-                            )}
-                            {room.size_sqm && (
-                              <span className="text-xs text-gray-400">
-                                {room.size_sqm}m²
-                              </span>
-                            )}
+                        <div className="flex items-center gap-3">
+                          {/* Room icon */}
+                          <div className="w-10 h-10 rounded-lg bg-amber-50 flex-shrink-0 flex items-center justify-center">
+                            <Bed className="w-5 h-5 text-amber-600" />
                           </div>
+
+                          {/* Room info */}
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-medium text-gray-900">
+                              {room.name}
+                            </span>
+                            <div className="flex items-center gap-3 mt-0.5">
+                              <span className="flex items-center gap-1 text-xs text-gray-500">
+                                <Users className="w-3 h-3" />
+                                {room.max_occupancy} pers. max
+                              </span>
+                              {room.available_bed_types?.length > 0 && (
+                                <span className="text-xs text-gray-400">
+                                  {room.available_bed_types.join('/')}
+                                </span>
+                              )}
+                              {room.size_sqm && (
+                                <span className="text-xs text-gray-400">
+                                  {room.size_sqm}m²
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Rate (simple — only when no allocation preview) */}
+                          {rateText && !preview && (
+                            <span className="text-sm font-medium text-amber-700 flex-shrink-0">
+                              {rateText}
+                            </span>
+                          )}
                         </div>
 
-                        {/* Rate */}
-                        {rateText && (
-                          <span className="text-sm font-medium text-amber-700 flex-shrink-0">
-                            {rateText}
-                          </span>
+                        {/* Allocation preview — bed type compatibility */}
+                        {preview && preview.length > 0 && (
+                          <div className="ml-[52px] flex flex-wrap gap-1.5 mt-0.5">
+                            {preview.map((p) => {
+                              const rateInfo = p.rate ? formatRate(p.rate) : null;
+                              return (
+                                <span
+                                  key={p.bed_type}
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                    p.supported
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                      : 'bg-red-50 text-red-600 border border-red-200'
+                                  }`}
+                                >
+                                  {p.supported ? '✓' : '✗'}
+                                  {BED_TYPE_LABELS[p.bed_type as RoomBedType] || p.bed_type}
+                                  ×{p.qty}
+                                  {rateInfo && (
+                                    <span className="text-[9px] text-gray-500 ml-0.5">{rateInfo}</span>
+                                  )}
+                                </span>
+                              );
+                            })}
+                          </div>
                         )}
                       </button>
                     );

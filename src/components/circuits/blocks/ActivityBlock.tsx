@@ -15,19 +15,25 @@ import {
   Coffee,
   UtensilsCrossed,
   Soup,
+  Bookmark,
+  LayoutTemplate,
 } from 'lucide-react';
 import { useCreateItem, useUpdateItem, useDeleteItem } from '@/hooks/useFormulaItems';
 import ItemEditor from '@/components/circuits/ItemEditor';
+import { RichTextEditor } from '@/components/editor';
+import SaveAsTemplateDialog from '@/components/templates/SaveAsTemplateDialog';
+import TemplateSyncDialog from '@/components/templates/TemplateSyncDialog';
+import { getBlockSyncStatus } from '@/hooks/useTemplateSync';
 import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import type { Formula, Item, CostNature, PaymentFlow } from '@/lib/api/types';
 import { mapRatioRule } from '@/lib/ratioUtils';
 
 /** Compact payment flow options for inline selects */
 const PAYMENT_FLOW_OPTIONS: { value: PaymentFlow; label: string; colorClass: string }[] = [
-  { value: 'booking', label: 'Fournisseur', colorClass: 'text-blue-600' },
+  { value: 'booking', label: 'Fournisseur', colorClass: 'text-[#0C9296]' },
   { value: 'advance', label: 'Allowance', colorClass: 'text-amber-600' },
-  { value: 'purchase_order', label: 'Achat bureau', colorClass: 'text-purple-600' },
-  { value: 'payroll', label: 'Salaire', colorClass: 'text-emerald-600' },
+  { value: 'purchase_order', label: 'Achat bureau', colorClass: 'text-[#DD9371]' },
+  { value: 'payroll', label: 'Salaire', colorClass: 'text-[#8BA080]' },
   { value: 'manual', label: 'Manuel', colorClass: 'text-gray-500' },
 ];
 
@@ -76,6 +82,8 @@ interface ActivityBlockProps {
   dayNumber?: number;
   /** Called when meal inclusion changes */
   onMealsChanged?: (meals: { breakfast: boolean; lunch: boolean; dinner: boolean }) => void;
+  /** VAT calculation mode — hides TTC/HT toggle when 'on_margin' */
+  vatMode?: 'on_margin' | 'on_selling_price';
 }
 
 export function ActivityBlock({
@@ -90,6 +98,7 @@ export function ActivityBlock({
   tripDays,
   dayNumber,
   onMealsChanged,
+  vatMode,
 }: ActivityBlockProps) {
   // Parse meals + text from description_html
   const parsed = parseActivityMeals(block.description_html);
@@ -104,7 +113,6 @@ export function ActivityBlock({
     setDescription(p.text);
   }, [block.description_html]);
   const [prestationsOpen, setPrestationsOpen] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const debounceRef = useRef<NodeJS.Timeout>(null);
 
   // Item management state
@@ -117,6 +125,11 @@ export function ActivityBlock({
   const [showItemEditor, setShowItemEditor] = useState(false);
   const [editingItem, setEditingItem] = useState<Partial<Item> | undefined>();
   const [deletingItemId, setDeletingItemId] = useState<number | null>(null);
+
+  // Template state
+  const [showSaveAsTemplate, setShowSaveAsTemplate] = useState(false);
+  const [showSyncDialog, setShowSyncDialog] = useState(false);
+  const syncStatus = getBlockSyncStatus(block);
 
   // Item CRUD hooks
   const { mutate: createItem } = useCreateItem();
@@ -134,14 +147,6 @@ export function ActivityBlock({
   const directItems = localItems;
   const totalCost = directItems.reduce((s, item) => s + ((item.unit_cost || 0) * (item.quantity || 1)), 0);
 
-  // Auto-resize textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    }
-  }, [description]);
-
   const handleTitleChange = (value: string) => {
     setTitle(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -150,12 +155,10 @@ export function ActivityBlock({
     }, 500);
   };
 
-  const handleDescriptionChange = (value: string) => {
-    setDescription(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      onUpdate?.({ description_html: serializeActivityMeals(meals, value) });
-    }, 500);
+  const handleDescriptionChange = (html: string) => {
+    setDescription(html);
+    // RichTextEditor already debounces internally (500ms)
+    onUpdate?.({ description_html: serializeActivityMeals(meals, html) });
   };
 
   const handleMealToggle = (meal: 'breakfast' | 'lunch' | 'dinner') => {
@@ -317,7 +320,7 @@ export function ActivityBlock({
 
   return (
     <>
-      <div className="group relative rounded-lg border border-blue-200 bg-blue-50/30 hover:border-blue-300 transition-colors">
+      <div className="group relative rounded-lg border border-[#99E7EB] bg-[#E6F9FA]/30 hover:border-[#66DBE1] transition-colors">
         {/* Header */}
         <div className="flex items-start gap-2 p-3">
           {/* Drag handle */}
@@ -332,7 +335,7 @@ export function ActivityBlock({
           {/* Title + Description */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <MapPin className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+              <MapPin className="w-3.5 h-3.5 text-[#0FB6BC] flex-shrink-0" />
               <input
                 value={title}
                 onChange={(e) => handleTitleChange(e.target.value)}
@@ -340,13 +343,12 @@ export function ActivityBlock({
                 className="flex-1 bg-transparent border-0 text-sm font-semibold text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-0 p-0"
               />
             </div>
-            <textarea
-              ref={textareaRef}
-              value={description}
-              onChange={(e) => handleDescriptionChange(e.target.value)}
+            <RichTextEditor
+              content={description}
+              onChange={handleDescriptionChange}
               placeholder="Description de l'activité..."
-              className="w-full resize-none border-0 bg-transparent text-sm text-gray-600 placeholder-gray-300 focus:outline-none focus:ring-0 p-0"
-              rows={2}
+              inline
+              enableContentRefs
             />
           </div>
 
@@ -380,10 +382,34 @@ export function ActivityBlock({
 
           {/* Cost badge (when prestations are collapsed) */}
           {!prestationsOpen && totalCost > 0 && (
-            <span className="flex-shrink-0 text-[10px] text-blue-600 font-medium whitespace-nowrap mt-1">
+            <span className="flex-shrink-0 text-[10px] text-[#0C9296] font-medium whitespace-nowrap mt-1">
               {totalCost.toLocaleString('fr-FR')} THB
             </span>
           )}
+
+          {/* Template sync indicator */}
+          {syncStatus !== 'no_template' && (
+            <button
+              onClick={() => setShowSyncDialog(true)}
+              className={`flex-shrink-0 p-1 transition-all ${
+                syncStatus === 'template_updated'
+                  ? 'text-amber-500 animate-pulse'
+                  : 'text-emerald-400 opacity-0 group-hover:opacity-100'
+              }`}
+              title={syncStatus === 'template_updated' ? 'Template mis à jour' : 'Lié à un template'}
+            >
+              <LayoutTemplate className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* Save as template button */}
+          <button
+            onClick={() => setShowSaveAsTemplate(true)}
+            className="flex-shrink-0 opacity-0 group-hover:opacity-100 text-gray-300 hover:text-[#0FB6BC] transition-all p-1"
+            title="Sauvegarder comme template"
+          >
+            <Bookmark className="w-3.5 h-3.5" />
+          </button>
 
           {/* Delete button */}
           <button
@@ -398,7 +424,7 @@ export function ActivityBlock({
         {/* ============================================================ */}
         {/* PRESTATIONS — collapsible                                    */}
         {/* ============================================================ */}
-        <div className="border-t border-blue-100">
+        <div className="border-t border-[#CCF3F5]">
           <button
             onClick={() => setPrestationsOpen(!prestationsOpen)}
             className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-gray-500 hover:text-gray-700 transition-colors"
@@ -415,7 +441,7 @@ export function ActivityBlock({
               </span>
             )}
             {totalCost > 0 && (
-              <span className="text-blue-600 font-medium ml-auto">
+              <span className="text-[#0C9296] font-medium ml-auto">
                 {totalCost.toLocaleString('fr-FR')} THB
               </span>
             )}
@@ -445,7 +471,7 @@ export function ActivityBlock({
                         ));
                       }
                     }}
-                    className="flex-shrink-0 text-[10px] border rounded px-1 py-0.5 bg-white focus:ring-1 focus:ring-blue-400 max-w-[90px] border-gray-200 text-gray-600 cursor-pointer"
+                    className="flex-shrink-0 text-[10px] border rounded px-1 py-0.5 bg-white focus:ring-1 focus:ring-[#33CFD7] max-w-[90px] border-gray-200 text-gray-600 cursor-pointer"
                     title="Flux de paiement"
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -453,7 +479,8 @@ export function ActivityBlock({
                       <option key={f.value} value={f.value}>{f.label}</option>
                     ))}
                   </select>
-                  {/* TTC/HT inline toggle */}
+                  {/* TTC/HT inline toggle — only in on_selling_price mode */}
+                  {vatMode !== 'on_margin' && (
                   <button
                     onClick={async (e) => {
                       e.stopPropagation();
@@ -478,13 +505,14 @@ export function ActivityBlock({
                   >
                     {item.price_includes_vat ? 'TTC' : 'HT'}
                   </button>
+                  )}
                   <span className="font-medium text-gray-700 flex-1 truncate">{item.name}</span>
-                  <span className="text-blue-600 font-medium whitespace-nowrap">
+                  <span className="text-[#0C9296] font-medium whitespace-nowrap">
                     {((item.unit_cost || 0) * (item.quantity || 1)).toLocaleString('fr-FR')} {item.currency || 'THB'}
                   </span>
                   <button
                     onClick={() => handleEditItem(item as Item)}
-                    className="p-0.5 text-gray-300 hover:text-blue-600 opacity-0 group-hover/item:opacity-100 transition-all"
+                    className="p-0.5 text-gray-300 hover:text-[#0C9296] opacity-0 group-hover/item:opacity-100 transition-all"
                     title="Modifier"
                   >
                     <Pencil className="w-3 h-3" />
@@ -510,14 +538,15 @@ export function ActivityBlock({
                 <select
                   value={quickFlow}
                   onChange={(e) => setQuickFlow(e.target.value as PaymentFlow)}
-                  className="text-[10px] bg-white border border-dashed border-gray-200 rounded px-1 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400 cursor-pointer"
+                  className="text-[10px] bg-white border border-dashed border-gray-200 rounded px-1 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-[#33CFD7] cursor-pointer"
                   title="Flux de paiement"
                 >
                   {PAYMENT_FLOW_OPTIONS.map(f => (
                     <option key={f.value} value={f.value}>{f.label}</option>
                   ))}
                 </select>
-                {/* TTC/HT toggle */}
+                {/* TTC/HT toggle — only in on_selling_price mode */}
+                {vatMode !== 'on_margin' && (
                 <button
                   type="button"
                   onClick={() => setQuickTTC(!quickTTC)}
@@ -530,6 +559,7 @@ export function ActivityBlock({
                 >
                   {quickTTC ? 'TTC' : 'HT'}
                 </button>
+                )}
                 <input
                   type="text"
                   value={quickName}
@@ -541,7 +571,7 @@ export function ActivityBlock({
                     }
                   }}
                   placeholder="Nom de la prestation..."
-                  className="flex-1 min-w-[120px] text-xs bg-white border border-dashed border-gray-200 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-300 placeholder:text-gray-300"
+                  className="flex-1 min-w-[120px] text-xs bg-white border border-dashed border-gray-200 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-[#33CFD7] focus:border-[#66DBE1] placeholder:text-gray-300"
                 />
                 <input
                   type="number"
@@ -556,12 +586,12 @@ export function ActivityBlock({
                   placeholder="Prix"
                   min={0}
                   step={0.01}
-                  className="w-20 text-xs bg-white border border-dashed border-gray-200 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-300 placeholder:text-gray-300 text-right"
+                  className="w-20 text-xs bg-white border border-dashed border-gray-200 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-[#33CFD7] focus:border-[#66DBE1] placeholder:text-gray-300 text-right"
                 />
                 <select
                   value={quickRatio}
                   onChange={(e) => setQuickRatio(e.target.value as 'set' | 'per_person')}
-                  className="text-xs bg-white border border-dashed border-gray-200 rounded px-1.5 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400 cursor-pointer"
+                  className="text-xs bg-white border border-dashed border-gray-200 rounded px-1.5 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-[#33CFD7] cursor-pointer"
                   title="Tarification"
                 >
                   <option value="set">Forfait</option>
@@ -570,7 +600,7 @@ export function ActivityBlock({
                 <button
                   onClick={handleQuickAdd}
                   disabled={!quickName.trim() || addingItem}
-                  className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded border border-blue-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                  className="flex items-center gap-1 text-xs text-[#0C9296] hover:text-[#06494B] bg-[#E6F9FA] hover:bg-[#CCF3F5] px-2 py-1.5 rounded border border-[#99E7EB] transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                 >
                   {addingItem ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -585,7 +615,7 @@ export function ActivityBlock({
                       setEditingItem({ cost_nature_code: 'ACT', day_start: dayNumber || 1, day_end: dayNumber || 1 });
                       setShowItemEditor(true);
                     }}
-                    className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-700 hover:bg-blue-50 px-2 py-1.5 rounded border border-dashed border-gray-300 hover:border-blue-300 transition-colors whitespace-nowrap"
+                    className="flex items-center gap-1 text-xs text-gray-500 hover:text-[#096D71] hover:bg-[#E6F9FA] px-2 py-1.5 rounded border border-dashed border-gray-300 hover:border-[#66DBE1] transition-colors whitespace-nowrap"
                     title="Ouvrir le formulaire de cotation détaillé"
                   >
                     <SlidersHorizontal className="w-3 h-3" />
@@ -611,11 +641,35 @@ export function ActivityBlock({
           item={editingItem}
           costNatures={costNatures}
           tripDays={tripDays || 7}
+          vatMode={vatMode}
           onSave={handleItemEditorSave}
           onCancel={() => {
             setShowItemEditor(false);
             setEditingItem(undefined);
           }}
+        />
+      )}
+
+      {/* Save as template dialog */}
+      <SaveAsTemplateDialog
+        isOpen={showSaveAsTemplate}
+        onClose={() => setShowSaveAsTemplate(false)}
+        formulaId={block.id}
+        defaultName={block.name}
+        defaultCategory={block.block_type || 'activity'}
+      />
+
+      {/* Template sync dialog */}
+      {block.template_source_id && (
+        <TemplateSyncDialog
+          isOpen={showSyncDialog}
+          onClose={() => setShowSyncDialog(false)}
+          formulaId={block.id}
+          formulaName={block.name}
+          templateSourceId={block.template_source_id}
+          sourceVersion={block.template_source_version ?? 0}
+          templateVersion={block.template_version ?? 1}
+          onSynced={onRefetch}
         />
       )}
     </>

@@ -24,5 +24,10 @@ export { AccommodationBlock } from './blocks/AccommodationBlock';
 // Transversal services
 export { TransversalServicesPanel } from './TransversalServicesPanel';
 
+// Room demand
+export { default as RoomDemandEditor } from './RoomDemandEditor';
+
 // Conditions
 export { ConditionsPanel } from './ConditionsPanel';
+
+// Note: CotationsTab is loaded via next/dynamic in page.tsx (lazy load)

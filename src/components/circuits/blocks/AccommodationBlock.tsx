@@ -1,18 +1,25 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Building2, ChevronDown, ChevronRight, Bed, Users, Check, Moon, Minus, Plus, Coffee, UtensilsCrossed, Soup, Loader2, Trash2 } from 'lucide-react';
+import { Building2, ChevronDown, ChevronRight, Bed, Users, Check, Moon, Minus, Plus, Coffee, UtensilsCrossed, Soup, Loader2, Trash2, Bookmark, LayoutTemplate, AlertTriangle } from 'lucide-react';
+import { toast } from 'sonner';
 import { useUpdateBlock } from '@/hooks/useBlocks';
 import { useCreateItem, useDeleteItem, useUpdateItem } from '@/hooks/useFormulaItems';
 import { useAccommodation, useRoomRates } from '@/hooks/useAccommodations';
 import { AccommodationSelectorDialog } from './AccommodationSelectorDialog';
+import SaveAsTemplateDialog from '@/components/templates/SaveAsTemplateDialog';
+import TemplateSyncDialog from '@/components/templates/TemplateSyncDialog';
+import { getBlockSyncStatus } from '@/hooks/useTemplateSync';
 import {
   resolveSeasonForDate,
   buildRateMap,
+  buildRateMapByBedType,
   getTripDayDate,
   formatRate,
 } from '@/lib/seasonMatcher';
-import type { Formula, Accommodation, RoomCategory, RoomRate, TripCondition } from '@/lib/api/types';
+import { useSyncRoomItems } from '@/hooks/useFormulaItems';
+import RoomDemandEditor, { BED_TYPE_LABELS } from '@/components/circuits/RoomDemandEditor';
+import type { Formula, Accommodation, RoomCategory, RoomRate, TripCondition, RoomDemandEntry, RoomBedType } from '@/lib/api/types';
 
 interface AccommodationBlockProps {
   block: Formula;
@@ -34,6 +41,8 @@ interface AccommodationBlockProps {
   onConvertToVariants?: (conditionId: number) => void;
   /** Label of the active variant option (e.g. "Budget") — displayed next to HÉBERGEMENT */
   variantLabel?: string;
+  /** Trip-level default room demand (inherited unless overridden at day level) */
+  tripRoomDemand?: RoomDemandEntry[];
 }
 
 /**
@@ -46,6 +55,10 @@ interface AccommodationMeta {
   breakfast_included?: boolean;
   lunch_included?: boolean;
   dinner_included?: boolean;
+  /** Per-day room allocation override (takes priority over trip.room_demand_json) */
+  room_allocation?: RoomDemandEntry[];
+  /** Whether this block uses a custom allocation (true) or inherits from trip (false/undefined) */
+  use_custom_allocation?: boolean;
 }
 
 /**
@@ -78,6 +91,7 @@ export function AccommodationBlock({
   tripConditions,
   onConvertToVariants,
   variantLabel,
+  tripRoomDemand,
 }: AccommodationBlockProps) {
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [showOtherRooms, setShowOtherRooms] = useState(false);
@@ -95,6 +109,7 @@ export function AccommodationBlock({
   const { mutate: createItem } = useCreateItem();
   const { mutate: deleteItem } = useDeleteItem();
   const { mutate: updateItem } = useUpdateItem();
+  const { mutate: syncRoomItems } = useSyncRoomItems();
 
   // Parse metadata from description_html
   const meta = useMemo(() => parseAccommodationMeta(block.description_html), [block.description_html]);
@@ -106,6 +121,26 @@ export function AccommodationBlock({
   const [localLunch, setLocalLunch] = useState<boolean>(meta?.lunch_included ?? false);
   const [localDinner, setLocalDinner] = useState<boolean>(meta?.dinner_included ?? false);
   const [saving, setSaving] = useState(false);
+  const [showCustomAllocation, setShowCustomAllocation] = useState(false);
+
+  // Template state
+  const [showSaveAsTemplate, setShowSaveAsTemplate] = useState(false);
+  const [showSyncDialog, setShowSyncDialog] = useState(false);
+  const syncStatus = getBlockSyncStatus(block);
+
+  // Effective room demand: custom override > trip-level > legacy fallback
+  const effectiveRoomDemand = useMemo<RoomDemandEntry[]>(() => {
+    if (meta?.use_custom_allocation && meta?.room_allocation?.length) {
+      return meta.room_allocation;
+    }
+    if (tripRoomDemand?.length) {
+      return tripRoomDemand;
+    }
+    // Legacy fallback: 1 DBL
+    return [{ bed_type: 'DBL', qty: 1 }];
+  }, [meta?.use_custom_allocation, meta?.room_allocation, tripRoomDemand]);
+
+  const hasMultiRoom = effectiveRoomDemand.length > 1 || (effectiveRoomDemand.length === 1 && (effectiveRoomDemand[0]?.qty ?? 0) > 1);
 
   // Sync local state when metadata changes from server (e.g. after hotel selection refetch)
   useEffect(() => {
@@ -184,58 +219,96 @@ export function AccommodationBlock({
       setLocalLunch(hasLunch);
       setLocalDinner(hasDinner);
 
+      // Build metadata (preserve existing custom allocation if set)
+      const newMeta: AccommodationMeta = {
+        accommodation_id: accommodation.id,
+        selected_room_category_id: roomCategory.id,
+        nights: currentNights,
+        breakfast_included: hasBreakfast,
+        lunch_included: hasLunch,
+        dinner_included: hasDinner,
+        // Preserve custom allocation if set
+        ...(meta?.use_custom_allocation ? {
+          use_custom_allocation: true,
+          room_allocation: meta.room_allocation,
+        } : {}),
+      };
+
       await updateBlock({
         formulaId: block.id,
         data: {
           name: `${accommodation.name}${starText}`,
-          description_html: JSON.stringify({
-            accommodation_id: accommodation.id,
-            selected_room_category_id: roomCategory.id,
-            nights: currentNights,
-            breakfast_included: hasBreakfast,
-            lunch_included: hasLunch,
-            dinner_included: hasDinner,
-          }),
+          description_html: JSON.stringify(newMeta),
         },
       });
 
-      // 2. Delete existing items
-      for (const item of directItems) {
-        await deleteItem(item.id);
+      // 2. Determine room allocation to use
+      const allocation = effectiveRoomDemand;
+
+      // Filter allocation against available bed types from this room category
+      const availableBeds = roomCategory.available_bed_types || [];
+      const validAllocation = availableBeds.length > 0
+        ? allocation.filter(a => availableBeds.includes(a.bed_type))
+        : allocation;
+
+      // 3. Use sync-room-items endpoint to create items atomically
+      if (validAllocation.length > 0) {
+        const syncResult = await syncRoomItems({
+          formulaId: block.id,
+          data: {
+            accommodation_id: accommodation.id,
+            room_category_id: roomCategory.id,
+            room_allocation: validAllocation,
+            nights: currentNights,
+            check_in_date: dayDate ? dayDate.toISOString().split('T')[0] : undefined,
+            meal_plan: mealPlan || 'BB',
+            condition_option_id: conditionOptionId ?? undefined,
+          },
+        });
+
+        // Notify user if pre-bookings were cancelled due to accommodation change
+        if (syncResult?.cancelled_bookings_count > 0) {
+          toast.warning(
+            syncResult.cancelled_bookings_message ||
+            `${syncResult.cancelled_bookings_count} pré-réservation(s) annulée(s) suite au changement d'hébergement`,
+            { duration: 6000 }
+          );
+        }
+      } else {
+        // Fallback: no valid bed types — create a single item with resolved rate
+        for (const item of directItems) {
+          await deleteItem(item.id);
+        }
+        const roomRate = resolvedRate ?? rateMap.get(roomCategory.id);
+        const unitCost = roomRate?.cost ?? 0;
+        const currency = roomRate?.currency ?? 'THB';
+
+        await createItem({
+          formulaId: block.id,
+          data: {
+            name: `${roomCategory.name}${roomCategory.available_bed_types?.length ? ' ' + roomCategory.available_bed_types.join('/') : ''}`,
+            supplier_id: accommodation.supplier_id,
+            unit_cost: unitCost,
+            currency: currency,
+            pricing_method: 'quotation',
+            ratio_categories: 'adult',
+            ratio_per: 1,
+            ratio_type: 'set',
+            times_type: 'fixed',
+            times_value: currentNights,
+            sort_order: 0,
+            seasons: [],
+            condition_option_id: conditionOptionId ?? undefined,
+          },
+        });
       }
 
-      // 3. Resolve rate for the selected room
-      // Use resolvedRate from dialog (fresh) or fallback to local rateMap (for quick-switch)
-      const roomRate = resolvedRate ?? rateMap.get(roomCategory.id);
-      const unitCost = roomRate?.cost ?? 0;
-      const currency = roomRate?.currency ?? 'THB';
-
-      // 4. Create the new room item with rate (times_value = number of nights)
-      await createItem({
-        formulaId: block.id,
-        data: {
-          name: `${roomCategory.name}${roomCategory.available_bed_types?.length ? ' ' + roomCategory.available_bed_types.join('/') : ''}`,
-          supplier_id: accommodation.supplier_id,
-          unit_cost: unitCost,
-          currency: currency,
-          pricing_method: 'quotation',
-          ratio_categories: 'adult',
-          ratio_per: 1,
-          ratio_type: 'set',
-          times_type: 'fixed',
-          times_value: currentNights,
-          sort_order: 0,
-          seasons: [],
-          condition_option_id: conditionOptionId ?? undefined,
-        },
-      });
-
-      // 5. Refresh — needed here because hotel/room structure changed
+      // 4. Refresh — needed here because hotel/room structure changed
       onRefetch?.();
     } catch (err) {
       console.error('Failed to update accommodation block:', err);
     }
-  }, [block.id, directItems, localNights, updateBlock, deleteItem, createItem, onRefetch, rateMap, conditionOptionId]);
+  }, [block.id, directItems, localNights, effectiveRoomDemand, dayDate, updateBlock, deleteItem, createItem, syncRoomItems, onRefetch, rateMap, conditionOptionId, meta]);
 
   // Quick-switch to another room (from the faded list)
   const handleSwitchRoom = useCallback(async (room: RoomCategory) => {
@@ -267,10 +340,11 @@ export function AccommodationBlock({
           data: { description_html: JSON.stringify(updatedMeta) },
         }),
       ];
-      if (selectedItem) {
+      // Update times_value on ALL items (multi-room: each bed type item)
+      for (const item of directItems) {
         promises.push(
           updateItem({
-            itemId: selectedItem.id,
+            itemId: item.id,
             data: { times_value: newNights },
           })
         );
@@ -283,7 +357,7 @@ export function AccommodationBlock({
     } finally {
       setSaving(false);
     }
-  }, [meta, block.id, selectedItem, updateBlock, updateItem]);
+  }, [meta, block.id, directItems, updateBlock, updateItem]);
 
   // Handle breakfast toggle — optimistic
   const handleBreakfastToggle = useCallback(async (included: boolean) => {
@@ -408,6 +482,30 @@ export function AccommodationBlock({
                 </div>
               </div>
             )}
+            {/* Template sync indicator */}
+            {syncStatus !== 'no_template' && (
+              <button
+                onClick={() => setShowSyncDialog(true)}
+                className={`flex-shrink-0 p-1 transition-all ${
+                  syncStatus === 'template_updated'
+                    ? 'text-amber-500 animate-pulse'
+                    : 'text-emerald-400 opacity-0 group-hover:opacity-100'
+                }`}
+                title={syncStatus === 'template_updated' ? 'Template mis à jour' : 'Lié à un template'}
+              >
+                <LayoutTemplate className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            {/* Save as template button */}
+            <button
+              onClick={() => setShowSaveAsTemplate(true)}
+              className="flex-shrink-0 opacity-0 group-hover:opacity-100 text-gray-300 hover:text-[#0FB6BC] transition-all p-1"
+              title="Sauvegarder comme template"
+            >
+              <Bookmark className="w-3.5 h-3.5" />
+            </button>
+
             {onDelete && (
               <button
                 onClick={() => {
@@ -487,37 +585,95 @@ export function AccommodationBlock({
           </div>
         )}
 
-        {/* Selected room item */}
-        {selectedItem && (
+        {/* Room items — multi-bed-type display */}
+        {directItems.length > 0 && (
           <div className="border-t border-amber-100 px-3 py-2 space-y-1">
-            <div className="flex items-center gap-2">
-              <Check className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
-              <span className="text-sm font-medium text-gray-800 flex-1 truncate">
-                {selectedItem.name}
-              </span>
-              {totalCost > 0 && (
-                <span className="text-xs font-medium text-amber-700">
-                  {localNights > 1
-                    ? `${(totalCost * localNights).toLocaleString('fr-FR')} ${selectedItem.currency || 'THB'} (${localNights}n × ${totalCost.toLocaleString('fr-FR')})`
-                    : `${totalCost.toLocaleString('fr-FR')} ${selectedItem.currency || 'THB'}`
-                  }
+            {directItems.map((item) => {
+              const itemTotal = (item.unit_cost || 0) * (item.ratio_per || 1) * localNights;
+              return (
+                <div key={item.id} className="flex items-center gap-2">
+                  <Check className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                  <span className="text-sm font-medium text-gray-800 flex-1 truncate">
+                    {item.name}
+                    {(item.ratio_per || 1) > 1 && (
+                      <span className="text-xs text-gray-400 ml-1">×{item.ratio_per}</span>
+                    )}
+                  </span>
+                  {item.unit_cost > 0 && (
+                    <span className="text-xs font-medium text-amber-700 flex-shrink-0">
+                      {localNights > 1
+                        ? `${itemTotal.toLocaleString('fr-FR')} ${item.currency || 'THB'}`
+                        : `${(item.unit_cost * (item.ratio_per || 1)).toLocaleString('fr-FR')} ${item.currency || 'THB'}`
+                      }
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+            {/* Total for multi-items */}
+            {directItems.length > 1 && (
+              <div className="flex items-center justify-end pt-1 border-t border-amber-50">
+                <span className="text-xs font-semibold text-amber-800">
+                  Total : {directItems.reduce((sum, item) =>
+                    sum + (item.unit_cost || 0) * (item.ratio_per || 1) * localNights, 0
+                  ).toLocaleString('fr-FR')} {directItems[0]?.currency || 'THB'}
+                  {localNights > 1 && (
+                    <span className="text-amber-500 font-normal ml-1">({localNights} nuits)</span>
+                  )}
                 </span>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Other items (if multiple) */}
-        {directItems.length > 1 && (
-          <div className="border-t border-amber-100 px-3 py-1.5 space-y-0.5">
-            {directItems.slice(1).map((item) => (
-              <div key={item.id} className="flex items-center gap-2 text-xs text-gray-600">
-                <span className="flex-1 truncate">{item.name}</span>
-                <span className="font-medium">
-                  {item.unit_cost?.toLocaleString('fr-FR')} {item.currency || 'THB'}
-                </span>
-              </div>
-            ))}
+        {/* Room allocation override — compact editor */}
+        {meta?.accommodation_id && showCustomAllocation && (
+          <div className="border-t border-amber-100 px-3 py-2">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-gray-600">Répartition personnalisée</span>
+              <button
+                onClick={async () => {
+                  // Reset to trip-level demand
+                  const updatedMeta: AccommodationMeta = { ...meta, use_custom_allocation: false, room_allocation: undefined };
+                  setShowCustomAllocation(false);
+                  await updateBlock({
+                    formulaId: block.id,
+                    data: { description_html: JSON.stringify(updatedMeta) },
+                  });
+                  onRefetch?.();
+                }}
+                className="text-[10px] text-gray-400 hover:text-red-500"
+              >
+                Réinitialiser
+              </button>
+            </div>
+            <RoomDemandEditor
+              value={meta?.room_allocation || effectiveRoomDemand}
+              onChange={async (newAllocation) => {
+                const updatedMeta: AccommodationMeta = {
+                  ...meta,
+                  use_custom_allocation: true,
+                  room_allocation: newAllocation,
+                };
+                await updateBlock({
+                  formulaId: block.id,
+                  data: { description_html: JSON.stringify(updatedMeta) },
+                });
+              }}
+              compact
+            />
+          </div>
+        )}
+
+        {/* Customize button (only when accommodation is selected and there is trip-level demand) */}
+        {meta?.accommodation_id && !showCustomAllocation && (tripRoomDemand?.length ?? 0) > 0 && (
+          <div className="border-t border-amber-100 px-3 py-1">
+            <button
+              onClick={() => setShowCustomAllocation(true)}
+              className="text-[10px] text-gray-400 hover:text-amber-600 transition-colors"
+            >
+              {meta?.use_custom_allocation ? '✏ Modifier la répartition' : '⚙ Personnaliser la répartition'}
+            </button>
           </div>
         )}
 
@@ -596,8 +752,32 @@ export function AccommodationBlock({
         currentHotelName={cleanName}
         tripStartDate={tripStartDate}
         dayNumber={dayNumber}
+        tripRoomDemand={effectiveRoomDemand}
         onSelect={handleSelect}
       />
+
+      {/* Save as template dialog */}
+      <SaveAsTemplateDialog
+        isOpen={showSaveAsTemplate}
+        onClose={() => setShowSaveAsTemplate(false)}
+        formulaId={block.id}
+        defaultName={block.name}
+        defaultCategory={block.block_type || 'accommodation'}
+      />
+
+      {/* Template sync dialog */}
+      {block.template_source_id && (
+        <TemplateSyncDialog
+          isOpen={showSyncDialog}
+          onClose={() => setShowSyncDialog(false)}
+          formulaId={block.id}
+          formulaName={block.name}
+          templateSourceId={block.template_source_id}
+          sourceVersion={block.template_source_version ?? 0}
+          templateVersion={block.template_version ?? 1}
+          onSynced={onRefetch}
+        />
+      )}
     </>
   );
 }

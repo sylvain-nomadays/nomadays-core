@@ -26,6 +26,8 @@ interface ItemEditorProps {
   conditionId?: number | null;
   /** Trip conditions for condition option dropdown */
   tripConditions?: TripCondition[];
+  /** VAT calculation mode — hides TTC/HT toggle when 'on_margin' */
+  vatMode?: 'on_margin' | 'on_selling_price';
 }
 
 // ─── Category icons (matches CostBreakdown) ──────────────────────────
@@ -78,6 +80,7 @@ export default function ItemEditor({
   serviceDays,
   conditionId,
   tripConditions,
+  vatMode,
 }: ItemEditorProps) {
   // Resolve initial cost nature code: prefer direct code, then lookup by id, then first in list
   const initialCostNatureCode = item?.cost_nature_code
@@ -111,6 +114,14 @@ export default function ItemEditor({
   );
   const [tierCategories, setTierCategories] = useState(item?.tier_categories || '');
 
+  // Pricing mode: 'unit' (single price) or 'category' (per-category prices)
+  const [pricingMode, setPricingMode] = useState<'unit' | 'category'>(() =>
+    item?.category_prices_json && Object.keys(item.category_prices_json).length > 0 ? 'category' : 'unit'
+  );
+  const [categoryPrices, setCategoryPrices] = useState<Record<string, number>>(
+    () => item?.category_prices_json || {}
+  );
+
   const [showSupplierSearch, setShowSupplierSearch] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState('');
   const [showNewSupplierForm, setShowNewSupplierForm] = useState(false);
@@ -141,6 +152,19 @@ export default function ItemEditor({
     const str = formData.ratio_categories || 'adult';
     return new Set(str.split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
   }, [formData.ratio_categories]);
+
+  // Parse tier_categories string into a Set for badge toggle
+  const selectedTierCategories = useMemo(() => {
+    if (!tierCategories) return new Set<string>();
+    return new Set(tierCategories.split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
+  }, [tierCategories]);
+
+  const toggleTierCategory = (code: string) => {
+    const next = new Set(selectedTierCategories);
+    if (next.has(code)) next.delete(code);
+    else next.add(code);
+    setTierCategories(next.size > 0 ? Array.from(next).join(',') : '');
+  };
 
   const toggleRatioCategory = (code: string) => {
     const next = new Set(selectedRatioCategories);
@@ -210,11 +234,18 @@ export default function ItemEditor({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const selectedCN = costNatures.find(cn => cn.code === formData.cost_nature_code);
+    const isCategoryMode = pricingMode === 'category';
     onSave({
       ...formData,
       cost_nature_id: selectedCN && selectedCN.id > 0 ? selectedCN.id : undefined,
+      category_prices_json: isCategoryMode && Object.keys(categoryPrices).length > 0 ? categoryPrices : undefined,
       tier_categories: tiersEnabled ? tierCategories || undefined : undefined,
-      price_tiers: tiersEnabled ? tiers : [],
+      price_tiers: tiersEnabled ? tiers.map(t => ({
+        ...t,
+        category_prices_json: isCategoryMode && t.category_prices_json && Object.keys(t.category_prices_json).length > 0
+          ? t.category_prices_json
+          : undefined,
+      })) : [],
     });
   };
 
@@ -535,91 +566,211 @@ export default function ItemEditor({
             )}
           </div>
 
-          {/* Pricing */}
-          <div className="grid grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Coût unitaire *
-              </label>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  required
-                  min={0}
-                  step={0.01}
-                  value={formData.unit_cost}
-                  onChange={e => setFormData({ ...formData, unit_cost: parseFloat(e.target.value) || 0 })}
-                  className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                {/* TTC/HT toggle */}
-                <button
-                  type="button"
-                  onClick={() => setFormData({ ...formData, price_includes_vat: !formData.price_includes_vat })}
-                  className={`text-[10px] font-semibold px-1.5 py-2 rounded-lg border transition-colors flex-shrink-0 ${
-                    formData.price_includes_vat
-                      ? 'bg-sage-50 text-sage-700 border-sage-200 hover:bg-sage-100'
-                      : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
-                  }`}
-                  title={formData.price_includes_vat
-                    ? 'TTC — TVA récupérable (cliquer pour passer en HT)'
-                    : 'HT — TVA non récupérable (cliquer pour passer en TTC)'
-                  }
-                >
-                  {formData.price_includes_vat ? 'TTC' : 'HT'}
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Devise
-              </label>
-              <select
-                value={formData.currency || defaultCurrency}
-                onChange={e => setFormData({ ...formData, currency: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+          {/* ─── Mode de tarification ─────────────────────────────── */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Mode de tarification
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPricingMode('unit')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                  pricingMode === 'unit'
+                    ? 'bg-primary-50 text-primary-700 border-primary-300'
+                    : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                }`}
               >
-                <option value="THB">THB</option>
-                <option value="EUR">EUR</option>
-                <option value="USD">USD</option>
-                <option value="VND">VND</option>
-                <option value="KHR">KHR</option>
-                <option value="LAK">LAK</option>
-                <option value="MMK">MMK</option>
-                <option value="IDR">IDR</option>
-                <option value="MYR">MYR</option>
-                <option value="JPY">JPY</option>
-                <option value="GBP">GBP</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {serviceDays ? 'Jours de service' : 'Quantité *'}
-              </label>
-              {serviceDays ? (
-                <div className="px-3 py-2 bg-gray-100 rounded-lg text-gray-700 text-sm">
-                  {serviceDays} jour{serviceDays > 1 ? 's' : ''}
-                  <span className="text-xs text-gray-400 ml-1">(calculé depuis la formule)</span>
-                </div>
-              ) : (
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  value={formData.quantity}
-                  onChange={e => setFormData({ ...formData, quantity: parseInt(e.target.value) || 1 })}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              )}
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Total
-              </label>
-              <div className="px-3 py-2 bg-gray-100 rounded-lg font-semibold text-gray-900">
-                {((formData.unit_cost || 0) * (serviceDays || formData.quantity || 1)).toLocaleString('fr-FR')} {formData.currency || defaultCurrency}
-              </div>
+                Prix unique
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPricingMode('category');
+                  // Initialize category prices from current unit_cost if empty
+                  if (Object.keys(categoryPrices).length === 0 && activePaxCategories.length > 0) {
+                    const init: Record<string, number> = {};
+                    const ratioCats = selectedRatioCategories;
+                    activePaxCategories.forEach(cat => {
+                      if (ratioCats.has(cat.code)) {
+                        init[cat.code] = formData.unit_cost || 0;
+                      }
+                    });
+                    setCategoryPrices(init);
+                  }
+                }}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                  pricingMode === 'category'
+                    ? 'bg-primary-50 text-primary-700 border-primary-300'
+                    : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                Prix par catégorie
+              </button>
             </div>
           </div>
+
+          {/* Pricing */}
+          {pricingMode === 'unit' ? (
+            /* ─── Prix unique ──────────────────────────────────── */
+            <div className="grid grid-cols-4 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Coût unitaire *
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    required
+                    min={0}
+                    step={0.01}
+                    value={formData.unit_cost}
+                    onChange={e => setFormData({ ...formData, unit_cost: parseFloat(e.target.value) || 0 })}
+                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  {/* TTC/HT toggle — only in on_selling_price mode */}
+                  {vatMode !== 'on_margin' && (
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, price_includes_vat: !formData.price_includes_vat })}
+                    className={`text-[10px] font-semibold px-1.5 py-2 rounded-lg border transition-colors flex-shrink-0 ${
+                      formData.price_includes_vat
+                        ? 'bg-sage-50 text-sage-700 border-sage-200 hover:bg-sage-100'
+                        : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                    }`}
+                    title={formData.price_includes_vat
+                      ? 'TTC — TVA récupérable (cliquer pour passer en HT)'
+                      : 'HT — TVA non récupérable (cliquer pour passer en TTC)'
+                    }
+                  >
+                    {formData.price_includes_vat ? 'TTC' : 'HT'}
+                  </button>
+                  )}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Devise
+                </label>
+                <select
+                  value={formData.currency || defaultCurrency}
+                  onChange={e => setFormData({ ...formData, currency: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                >
+                  <option value="THB">THB</option>
+                  <option value="EUR">EUR</option>
+                  <option value="USD">USD</option>
+                  <option value="VND">VND</option>
+                  <option value="KHR">KHR</option>
+                  <option value="LAK">LAK</option>
+                  <option value="MMK">MMK</option>
+                  <option value="IDR">IDR</option>
+                  <option value="MYR">MYR</option>
+                  <option value="JPY">JPY</option>
+                  <option value="GBP">GBP</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {serviceDays ? 'Jours de service' : 'Quantité *'}
+                </label>
+                {serviceDays ? (
+                  <div className="px-3 py-2 bg-gray-100 rounded-lg text-gray-700 text-sm">
+                    {serviceDays} jour{serviceDays > 1 ? 's' : ''}
+                    <span className="text-xs text-gray-400 ml-1">(calculé depuis la formule)</span>
+                  </div>
+                ) : (
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    value={formData.quantity}
+                    onChange={e => setFormData({ ...formData, quantity: parseInt(e.target.value) || 1 })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Total
+                </label>
+                <div className="px-3 py-2 bg-gray-100 rounded-lg font-semibold text-gray-900">
+                  {((formData.unit_cost || 0) * (serviceDays || formData.quantity || 1)).toLocaleString('fr-FR')} {formData.currency || defaultCurrency}
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* ─── Prix par catégorie ───────────────────────────── */
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Devise
+                  </label>
+                  <select
+                    value={formData.currency || defaultCurrency}
+                    onChange={e => setFormData({ ...formData, currency: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                  >
+                    <option value="THB">THB</option>
+                    <option value="EUR">EUR</option>
+                    <option value="USD">USD</option>
+                    <option value="VND">VND</option>
+                    <option value="KHR">KHR</option>
+                    <option value="LAK">LAK</option>
+                    <option value="MMK">MMK</option>
+                    <option value="IDR">IDR</option>
+                    <option value="MYR">MYR</option>
+                    <option value="JPY">JPY</option>
+                    <option value="GBP">GBP</option>
+                  </select>
+                </div>
+                {/* TTC/HT toggle — only in on_selling_price mode */}
+                {vatMode !== 'on_margin' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">TVA</label>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, price_includes_vat: !formData.price_includes_vat })}
+                    className={`text-xs font-semibold px-3 py-2 rounded-lg border transition-colors ${
+                      formData.price_includes_vat
+                        ? 'bg-sage-50 text-sage-700 border-sage-200 hover:bg-sage-100'
+                        : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                    }`}
+                  >
+                    {formData.price_includes_vat ? 'TTC' : 'HT'}
+                  </button>
+                </div>
+                )}
+              </div>
+
+              <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 space-y-2">
+                {activePaxCategories.filter(cat => selectedRatioCategories.has(cat.code)).map(cat => (
+                  <div key={cat.code} className="flex items-center gap-3">
+                    <span className="text-sm font-medium text-gray-700 w-24">{cat.label}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={categoryPrices[cat.code] ?? 0}
+                      onChange={e => {
+                        setCategoryPrices({ ...categoryPrices, [cat.code]: parseFloat(e.target.value) || 0 });
+                        // Keep unit_cost in sync with the first (highest) category price
+                        if (cat.code === 'adult' || Object.keys(categoryPrices).length === 0) {
+                          setFormData(prev => ({ ...prev, unit_cost: parseFloat(e.target.value) || 0 }));
+                        }
+                      }}
+                      className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <span className="text-xs text-gray-400 w-10">{formData.currency || defaultCurrency}</span>
+                  </div>
+                ))}
+                <p className="text-[10px] text-gray-400">
+                  Prix basés sur les catégories sélectionnées dans la règle de ratio
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* ─── Price Tiers ──────────────────────────────────────── */}
           <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -643,91 +794,147 @@ export default function ItemEditor({
 
             {tiersEnabled && (
               <div className="p-4 space-y-3">
-                {/* Tier categories */}
+                {/* Tier categories — badge selector */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">
                     Catégories comptées pour le palier
                   </label>
-                  <input
-                    type="text"
-                    value={tierCategories}
-                    onChange={(e) => setTierCategories(e.target.value)}
-                    placeholder="adult,teen,child (vide = ratio_categories)"
-                    className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                  <p className="text-[10px] text-gray-400 mt-0.5">
-                    Codes séparés par virgule. Vide = utilise les mêmes que la règle de ratio.
+                  {activePaxCategories.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {activePaxCategories.map(cat => {
+                        const isSelected = selectedTierCategories.has(cat.code);
+                        // If nothing is selected, all are implicitly used (from ratio_categories)
+                        const isImplicit = selectedTierCategories.size === 0 && selectedRatioCategories.has(cat.code);
+                        return (
+                          <button
+                            key={cat.code}
+                            type="button"
+                            onClick={() => toggleTierCategory(cat.code)}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border transition-colors ${
+                              isSelected
+                                ? 'bg-primary-50 text-primary-700 border-primary-300 hover:bg-primary-100'
+                                : isImplicit
+                                  ? 'bg-gray-100 text-gray-500 border-gray-300 border-dashed hover:bg-gray-150'
+                                  : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 hover:text-gray-600'
+                            }`}
+                          >
+                            {isSelected && <span className="text-primary-500">✓</span>}
+                            {cat.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Vide = utilise les mêmes catégories que la règle de ratio
                   </p>
                 </div>
 
                 {/* Tiers table */}
                 <div className="space-y-1.5">
                   {tiers.map((tier, idx) => (
-                    <div key={idx} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-gray-500">De</span>
-                        <input
-                          type="number"
-                          min={1}
-                          value={tier.pax_min}
-                          onChange={(e) => {
-                            const updated = [...tiers];
-                            updated[idx] = { ...updated[idx], pax_min: parseInt(e.target.value) || 1 } as ItemPriceTier;
-                            setTiers(updated);
-                          }}
-                          className="w-12 px-1.5 py-1 text-sm border border-gray-200 rounded text-center"
-                        />
-                        <span className="text-xs text-gray-500">à</span>
-                        <input
-                          type="number"
-                          min={1}
-                          value={tier.pax_max}
-                          onChange={(e) => {
-                            const updated = [...tiers];
-                            updated[idx] = { ...updated[idx], pax_max: parseInt(e.target.value) || 1 } as ItemPriceTier;
-                            setTiers(updated);
-                          }}
-                          className="w-12 px-1.5 py-1 text-sm border border-gray-200 rounded text-center"
-                        />
-                        <span className="text-xs text-gray-500">pax</span>
+                    <div key={idx} className="bg-gray-50 rounded-lg px-3 py-2 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-gray-500">De</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={tier.pax_min}
+                            onChange={(e) => {
+                              const updated = [...tiers];
+                              updated[idx] = { ...updated[idx], pax_min: parseInt(e.target.value) || 1 } as ItemPriceTier;
+                              setTiers(updated);
+                            }}
+                            className="w-12 px-1.5 py-1 text-sm border border-gray-200 rounded text-center"
+                          />
+                          <span className="text-xs text-gray-500">à</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={tier.pax_max}
+                            onChange={(e) => {
+                              const updated = [...tiers];
+                              updated[idx] = { ...updated[idx], pax_max: parseInt(e.target.value) || 1 } as ItemPriceTier;
+                              setTiers(updated);
+                            }}
+                            className="w-12 px-1.5 py-1 text-sm border border-gray-200 rounded text-center"
+                          />
+                          <span className="text-xs text-gray-500">pax</span>
+                        </div>
+
+                        {pricingMode === 'unit' && (
+                          <div className="flex items-center gap-1.5 flex-1">
+                            <span className="text-xs text-gray-500">Prix:</span>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              value={tier.unit_cost}
+                              onChange={(e) => {
+                                const updated = [...tiers];
+                                updated[idx] = { ...updated[idx], unit_cost: parseFloat(e.target.value) || 0 } as ItemPriceTier;
+                                setTiers(updated);
+                              }}
+                              className="w-24 px-2 py-1 text-sm border border-gray-200 rounded"
+                            />
+                          </div>
+                        )}
+
+                        {/* Category adjustments compact display (only in unit mode) */}
+                        {pricingMode === 'unit' && (
+                          <div className="flex items-center gap-1">
+                            {tier.category_adjustments_json && Object.entries(tier.category_adjustments_json).map(([cat, pct]) => {
+                              const val = pct as number;
+                              return (
+                                <span key={cat} className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">
+                                  {cat}: {val > 0 ? '+' : ''}{val}%
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Delete tier */}
+                        <button
+                          type="button"
+                          onClick={() => setTiers(tiers.filter((_, i) => i !== idx))}
+                          className="p-1 text-gray-300 hover:text-red-500 transition-colors ml-auto"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </div>
 
-                      <div className="flex items-center gap-1.5 flex-1">
-                        <span className="text-xs text-gray-500">Prix:</span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.01}
-                          value={tier.unit_cost}
-                          onChange={(e) => {
-                            const updated = [...tiers];
-                            updated[idx] = { ...updated[idx], unit_cost: parseFloat(e.target.value) || 0 } as ItemPriceTier;
-                            setTiers(updated);
-                          }}
-                          className="w-24 px-2 py-1 text-sm border border-gray-200 rounded"
-                        />
-                      </div>
-
-                      {/* Category adjustments compact display */}
-                      <div className="flex items-center gap-1">
-                        {tier.category_adjustments_json && Object.entries(tier.category_adjustments_json).map(([cat, pct]) => {
-                          const val = pct as number;
-                          return (
-                            <span key={cat} className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">
-                              {cat}: {val > 0 ? '+' : ''}{val}%
-                            </span>
-                          );
-                        })}
-                      </div>
-
-                      {/* Delete tier */}
-                      <button
-                        type="button"
-                        onClick={() => setTiers(tiers.filter((_, i) => i !== idx))}
-                        className="p-1 text-gray-300 hover:text-red-500 transition-colors"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+                      {/* Per-category prices for this tier (only in category mode) */}
+                      {pricingMode === 'category' && (
+                        <div className="pl-4 space-y-1">
+                          {activePaxCategories.filter(cat => selectedRatioCategories.has(cat.code)).map(cat => (
+                            <div key={cat.code} className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 w-20">{cat.label}</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                value={tier.category_prices_json?.[cat.code] ?? tier.unit_cost ?? 0}
+                                onChange={(e) => {
+                                  const updated = [...tiers];
+                                  const current = updated[idx]!;
+                                  const newCatPrices = { ...(current.category_prices_json || {}) };
+                                  newCatPrices[cat.code] = parseFloat(e.target.value) || 0;
+                                  updated[idx] = { ...current, category_prices_json: newCatPrices };
+                                  // Keep tier unit_cost in sync with adult price
+                                  if (cat.code === 'adult') {
+                                    updated[idx] = { ...updated[idx]!, unit_cost: parseFloat(e.target.value) || 0 };
+                                  }
+                                  setTiers(updated);
+                                }}
+                                className="w-24 px-2 py-1 text-xs border border-gray-200 rounded"
+                              />
+                              <span className="text-[10px] text-gray-400">{formData.currency || defaultCurrency}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

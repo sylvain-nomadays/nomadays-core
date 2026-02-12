@@ -36,6 +36,8 @@ interface TransversalServicesPanelProps {
   costNatures: CostNature[];
   onRefetch: () => void;
   conditionsVersion?: number;
+  /** VAT calculation mode — hides TTC/HT toggle when 'on_margin' */
+  vatMode?: 'on_margin' | 'on_selling_price';
 }
 
 // ─── TransversalFormulaRow ──────────────────────────────────────────
@@ -49,6 +51,7 @@ interface TransversalFormulaRowProps {
   tripConditions?: TripCondition[];
   tripDays: number;
   onRefetch: () => void;
+  vatMode?: 'on_margin' | 'on_selling_price';
 }
 
 function TransversalFormulaRow({
@@ -60,6 +63,7 @@ function TransversalFormulaRow({
   tripConditions,
   tripDays,
   onRefetch,
+  vatMode,
 }: TransversalFormulaRowProps) {
   // ─── State ──────────────────────────────────────────────────────
   const [isEditingName, setIsEditingName] = useState(false);
@@ -449,7 +453,8 @@ function TransversalFormulaRow({
                       <option key={f.value} value={f.value}>{f.label}</option>
                     ))}
                   </select>
-                  {/* TTC/HT inline toggle */}
+                  {/* TTC/HT inline toggle — only in on_selling_price mode */}
+                  {vatMode !== 'on_margin' && (
                   <button
                     onClick={async (e) => {
                       e.stopPropagation();
@@ -474,6 +479,7 @@ function TransversalFormulaRow({
                   >
                     {item.price_includes_vat ? 'TTC' : 'HT'}
                   </button>
+                  )}
                   <span className={`font-medium flex-1 truncate ${isIncluded ? 'text-gray-700' : 'text-gray-400 line-through'}`}>{item.name}</span>
 
                   {/* Inline condition option selector — only when formula has a condition */}
@@ -554,7 +560,8 @@ function TransversalFormulaRow({
                     <option key={f.value} value={f.value}>{f.label}</option>
                   ))}
                 </select>
-                {/* TTC/HT toggle */}
+                {/* TTC/HT toggle — only in on_selling_price mode */}
+                {vatMode !== 'on_margin' && (
                 <button
                   type="button"
                   onClick={() => setQuickTTC(!quickTTC)}
@@ -567,6 +574,7 @@ function TransversalFormulaRow({
                 >
                   {quickTTC ? 'TTC' : 'HT'}
                 </button>
+                )}
                 <input
                   type="text"
                   value={quickName}
@@ -655,6 +663,7 @@ function TransversalFormulaRow({
           serviceDays={serviceDays}
           conditionId={formula.condition_id}
           tripConditions={tripConditions}
+          vatMode={vatMode}
           onSave={handleItemEditorSave}
           onCancel={() => {
             setShowItemEditor(false);
@@ -674,6 +683,7 @@ export function TransversalServicesPanel({
   costNatures,
   onRefetch,
   conditionsVersion,
+  vatMode,
 }: TransversalServicesPanelProps) {
   // Load trip conditions directly (refreshKey triggers re-fetch when conditions change elsewhere)
   const { tripConditions } = useTripConditions(tripId, conditionsVersion);
@@ -807,6 +817,7 @@ export function TransversalServicesPanel({
                   tripConditions={tripConditions}
                   tripDays={totalDays}
                   onRefetch={() => { refetch(); onRefetch(); }}
+                  vatMode={vatMode}
                 />
               ))}
 

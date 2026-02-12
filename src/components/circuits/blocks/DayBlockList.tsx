@@ -91,6 +91,10 @@ interface DayBlockListProps {
   linkedAccommodation?: LinkedAccommodation;
   /** Version counter to trigger re-fetch of trip conditions when they change in ConditionsPanel */
   conditionsVersion?: number;
+  /** Trip-level room demand (passed to AccommodationBlock for room allocation) */
+  tripRoomDemand?: import('@/lib/api/types').RoomDemandEntry[];
+  /** VAT calculation mode — hides TTC/HT toggle on items when 'on_margin' */
+  vatMode?: 'on_margin' | 'on_selling_price';
 }
 
 /**
@@ -110,6 +114,7 @@ function SortableBlock({
   costNatures,
   tripDays,
   dayNumber,
+  vatMode,
 }: {
   block: Formula;
   dayId: number;
@@ -120,6 +125,7 @@ function SortableBlock({
   costNatures?: CostNature[];
   tripDays?: number;
   dayNumber?: number;
+  vatMode?: 'on_margin' | 'on_selling_price';
 }) {
   const {
     attributes,
@@ -167,6 +173,7 @@ function SortableBlock({
 
           tripDays={tripDays}
           dayNumber={dayNumber}
+          vatMode={vatMode}
         />
       ) : (
         <ActivityBlock
@@ -181,6 +188,7 @@ function SortableBlock({
 
           tripDays={tripDays}
           dayNumber={dayNumber}
+          vatMode={vatMode}
           onMealsChanged={() => {
             // Trigger refetch to rescan activity meals
             onRefetch?.();
@@ -225,6 +233,8 @@ export function DayBlockList({
   onActivityMealsChanged,
   linkedAccommodation,
   conditionsVersion,
+  tripRoomDemand,
+  vatMode,
 }: DayBlockListProps) {
   const { data: blocks, loading, refetch: refetchBlocks } = useDayBlocks(dayId);
   const { mutate: createBlock, loading: creating } = useCreateBlock();
@@ -326,7 +336,7 @@ export function DayBlockList({
   const handleCreateBlock = async (blockType: 'text' | 'activity' | 'transport' | 'accommodation') => {
     setAddMenuOpen(false);
     const currentBlocks = blocks || [];
-    const nonAccommodationBlocks = currentBlocks.filter(b => b.block_type !== 'accommodation');
+    const nonAccommodationBlocks = currentBlocks.filter(b => b.block_type !== 'accommodation' && b.block_type !== 'roadbook');
     const nextSortOrder = nonAccommodationBlocks.length;
 
     const nameMap = {
@@ -437,8 +447,9 @@ export function DayBlockList({
     }
   };
 
-  // Separate accommodation blocks from others
-  const sortableBlocks = (blocks || []).filter(b => b.block_type !== 'accommodation');
+  // Separate accommodation & roadbook blocks from sortable programme blocks
+  // Roadbook annotations live exclusively in the Roadbook tab
+  const sortableBlocks = (blocks || []).filter(b => b.block_type !== 'accommodation' && b.block_type !== 'roadbook');
   const accommodationBlocks = (blocks || []).filter(b => b.block_type === 'accommodation');
 
   // Group accommodation blocks: standalone (no condition) vs variant groups (by condition_id)
@@ -531,7 +542,7 @@ export function DayBlockList({
                 });
                 handleRefetch();
               }}
-              className="text-xs text-emerald-600 hover:text-emerald-700 font-medium"
+              className="text-xs text-[#0FB6BC] hover:text-[#0C9296] font-medium"
             >
               Convertir en bloc
             </button>
@@ -557,7 +568,7 @@ export function DayBlockList({
             costNatures={costNatures}
             tripDays={tripDays}
             dayNumber={dayNumber}
-  
+            vatMode={vatMode}
           />
         ))}
       </SortableContext>
@@ -567,7 +578,7 @@ export function DayBlockList({
         <PopoverTrigger asChild>
           <button
             disabled={creating}
-            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-dashed border-gray-200 text-gray-400 hover:border-emerald-300 hover:text-emerald-600 hover:bg-emerald-50/50 transition-all text-sm"
+            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-dashed border-gray-200 text-gray-400 hover:border-[#99E7EB] hover:text-[#0C9296] hover:bg-[#E6F9FA]/50 transition-all text-sm"
           >
             {creating ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -589,14 +600,14 @@ export function DayBlockList({
             onClick={() => handleCreateBlock('activity')}
             className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
           >
-            <MapPin className="w-4 h-4 text-blue-500" />
+            <MapPin className="w-4 h-4 text-[#0FB6BC]" />
             Activité
           </button>
           <button
             onClick={() => handleCreateBlock('transport')}
             className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
           >
-            <Car className="w-4 h-4 text-purple-500" />
+            <Car className="w-4 h-4 text-[#DD9371]" />
             Déplacement
           </button>
           <button
@@ -639,6 +650,7 @@ export function DayBlockList({
           tripStartDate={tripStartDate}
           costNatures={costNatures}
           tripDays={tripDays}
+          tripRoomDemand={tripRoomDemand}
           onRefetch={handleRefetch}
           onAddVariant={handleAddVariant}
         />
@@ -655,6 +667,7 @@ export function DayBlockList({
             locationHint={locationTo}
             tripStartDate={tripStartDate}
             tripConditions={tripConditions}
+            tripRoomDemand={tripRoomDemand}
             onRefetch={handleRefetch}
             onDelete={() => handleDeleteBlock(accomBlock.id)}
             onConvertToVariants={async (conditionId: number) => {

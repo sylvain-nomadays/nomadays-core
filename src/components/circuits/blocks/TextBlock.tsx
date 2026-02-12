@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
 import { GripVertical, X, FileText } from 'lucide-react';
 import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import type { Formula } from '@/lib/api/types';
+import { RichTextEditor } from '@/components/editor';
 
 interface TextBlockProps {
   block: Formula;
@@ -20,25 +20,9 @@ export function TextBlock({
   dragListeners,
   dragAttributes,
 }: TextBlockProps) {
-  const [text, setText] = useState(block.description_html || '');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const debounceRef = useRef<NodeJS.Timeout>(null);
-
-  // Auto-resize textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    }
-  }, [text]);
-
-  const handleChange = (value: string) => {
-    setText(value);
-    // Debounce save
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      onUpdate?.({ description_html: value });
-    }, 500);
+  const handleChange = (html: string) => {
+    // RichTextEditor already debounces internally (500ms)
+    onUpdate?.({ description_html: html });
   };
 
   return (
@@ -58,13 +42,12 @@ export function TextBlock({
           <FileText className="w-3.5 h-3.5 text-gray-400" />
           <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Texte</span>
         </div>
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => handleChange(e.target.value)}
+        <RichTextEditor
+          content={block.description_html || ''}
+          onChange={handleChange}
           placeholder="Description narrative..."
-          className="w-full resize-none border-0 bg-transparent text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-0 p-0"
-          rows={2}
+          inline
+          enableContentRefs
         />
       </div>
 
