@@ -134,6 +134,46 @@ export function useDeleteItem() {
 }
 
 /**
+ * Sync room items from a room allocation.
+ * Replaces all items in a formula with one Item per (bed_type, qty) entry.
+ */
+export function useSyncRoomItems() {
+  const mutationFn = useCallback(
+    async ({
+      formulaId,
+      data,
+    }: {
+      formulaId: number;
+      data: {
+        accommodation_id: number;
+        room_category_id: number;
+        room_allocation: Array<{ bed_type: string; qty: number }>;
+        nights?: number;
+        check_in_date?: string;
+        meal_plan?: string;
+        condition_option_id?: number | null;
+      };
+    }) => {
+      return apiClient.post<{
+        items: Array<{
+          bed_type: string;
+          qty: number;
+          item_id: number;
+          unit_cost: number;
+          currency: string;
+          rate_found: boolean;
+        }>;
+        cancelled_bookings_count: number;
+        cancelled_bookings_message?: string | null;
+      }>(`/trip-structure/formulas/${formulaId}/sync-room-items`, data);
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
  * Helper: delete all items in a formula, then create a new one.
  * Used by AccommodationBlock when changing room selection.
  */

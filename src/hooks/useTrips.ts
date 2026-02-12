@@ -3,7 +3,7 @@
 import { useCallback } from 'react';
 import { apiClient } from '@/lib/api/client';
 import { useApi, useMutation } from './useApi';
-import type { Trip, TripDay, TripPhoto, CreateTripDTO, UpdateTripDTO, PaginatedResponse, QuotationResult } from '@/lib/api/types';
+import type { Trip, TripDay, TripPhoto, CreateTripDTO, UpdateTripDTO, PaginatedResponse, QuotationResult, PublishTripResponse, SelectionOptionsResponse, SelectTripRequest, SelectTripResponse, DeselectTripResponse } from '@/lib/api/types';
 
 interface TripsFilters {
   type?: string;
@@ -11,6 +11,7 @@ interface TripsFilters {
   search?: string;
   page?: number;
   page_size?: number;
+  dossier_id?: string;
 }
 
 /**
@@ -24,11 +25,12 @@ export function useTrips(filters: TripsFilters = {}) {
     if (filters.search) params.append('search', filters.search);
     if (filters.page) params.append('page', String(filters.page));
     if (filters.page_size) params.append('page_size', String(filters.page_size));
+    if (filters.dossier_id) params.append('dossier_id', filters.dossier_id);
 
     const query = params.toString();
     const endpoint = `/trips${query ? `?${query}` : ''}`;
     return apiClient.get<PaginatedResponse<Trip>>(endpoint);
-  }, [filters.type, filters.status, filters.search, filters.page, filters.page_size]);
+  }, [filters.type, filters.status, filters.search, filters.page, filters.page_size, filters.dossier_id]);
 
   return useApi(fetcher);
 }
@@ -79,11 +81,27 @@ export function useDeleteTrip() {
 }
 
 /**
- * Hook to duplicate a trip
+ * Hook to duplicate a trip.
+ * Optionally pass dossier_id to link the copy to a dossier,
+ * and as_type to convert it (e.g. 'custom' for client dossiers).
  */
 export function useDuplicateTrip() {
-  const mutationFn = useCallback(async (id: number) => {
-    return apiClient.post<Trip>(`/trips/${id}/duplicate`);
+  const mutationFn = useCallback(async (args: number | {
+    id: number;
+    dossierId?: string;
+    newName?: string;
+    asType?: string;
+  }) => {
+    // Accept simple id (backward-compat) or options object
+    if (typeof args === 'number') {
+      return apiClient.post<Trip>(`/trips/${args}/duplicate`);
+    }
+    const params = new URLSearchParams();
+    if (args.dossierId) params.append('dossier_id', args.dossierId);
+    if (args.newName) params.append('new_name', args.newName);
+    if (args.asType) params.append('as_type', args.asType);
+    const qs = params.toString();
+    return apiClient.post<Trip>(`/trips/${args.id}/duplicate${qs ? `?${qs}` : ''}`);
   }, []);
 
   return useMutation(mutationFn);
@@ -278,6 +296,78 @@ export function useReorderDays() {
 export function useCalculateQuotation() {
   const mutationFn = useCallback(async (tripId: number) => {
     return apiClient.post<QuotationResult>(`/quotation/calculate/${tripId}`);
+  }, []);
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook to publish a trip (draft → sent) + send email to client.
+ * POST /trips/{tripId}/publish
+ */
+export function usePublishTrip() {
+  const mutationFn = useCallback(async ({
+    tripId,
+    clientEmail,
+    sendEmail = true,
+  }: {
+    tripId: number;
+    clientEmail?: string;
+    sendEmail?: boolean;
+  }) => {
+    return apiClient.post<PublishTripResponse>(`/trips/${tripId}/publish`, {
+      client_email: clientEmail || null,
+      send_email: sendEmail,
+    });
+  }, []);
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook to fetch selection options for a trip (cotations + pricing entries).
+ * GET /trips/{tripId}/selection-options
+ */
+export function useSelectionOptions(tripId: number | null) {
+  const fetcher = useCallback(async () => {
+    if (!tripId) throw new Error('Trip ID is required');
+    return apiClient.get<SelectionOptionsResponse>(`/trips/${tripId}/selection-options`);
+  }, [tripId]);
+
+  return useApi(fetcher, { immediate: !!tripId });
+}
+
+/**
+ * Hook to select/confirm a trip for a dossier.
+ * POST /trips/{tripId}/select
+ */
+export function useSelectTrip() {
+  const mutationFn = useCallback(async ({
+    tripId,
+    cotationId,
+    finalPaxCount,
+  }: {
+    tripId: number;
+    cotationId: number;
+    finalPaxCount?: number;
+  }) => {
+    return apiClient.post<SelectTripResponse>(`/trips/${tripId}/select`, {
+      cotation_id: cotationId,
+      final_pax_count: finalPaxCount || null,
+    } as SelectTripRequest);
+  }, []);
+
+  return useMutation(mutationFn);
+}
+
+
+/**
+ * Hook to deselect/undo a trip confirmation for a dossier.
+ * POST /trips/{tripId}/deselect
+ */
+export function useDeselectTrip() {
+  const mutationFn = useCallback(async (tripId: number) => {
+    return apiClient.post<DeselectTripResponse>(`/trips/${tripId}/deselect`, {});
   }, []);
 
   return useMutation(mutationFn);

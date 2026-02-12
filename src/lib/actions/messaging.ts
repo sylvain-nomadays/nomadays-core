@@ -71,6 +71,10 @@ export interface Message {
   template_id: string | null
   ai_assisted: boolean
   created_at: string
+  // Multi-channel support
+  channel: 'email' | 'whatsapp'
+  whatsapp_message_sid?: string | null
+  whatsapp_media_urls?: string[]
 }
 
 export interface EmailTemplate {
@@ -247,6 +251,142 @@ export async function sendMessage(input: {
   return data
 }
 
+// ============================================================
+// WHATSAPP MESSAGE
+// ============================================================
+
+export async function sendWhatsAppMessage(input: {
+  dossierId: string
+  recipientPhone: string    // Format E.164
+  recipientName?: string
+  bodyText: string
+  mediaUrls?: string[]
+  aiSuggestionId?: string
+}) {
+  const supabase = await createClient()
+  const currentUser = await getCurrentUser()
+
+  if (!currentUser) {
+    throw new Error('User not found')
+  }
+
+  // Récupérer le tenant_id du dossier
+  const { data: dossier } = await supabase
+    .from('dossiers')
+    .select('tenant_id')
+    .eq('id', input.dossierId)
+    .single()
+
+  if (!dossier) {
+    throw new Error('Dossier not found')
+  }
+
+  // Récupérer la config WhatsApp du tenant
+  const { data: waConfig } = await supabase
+    .from('tenant_whatsapp_config')
+    .select('whatsapp_number')
+    .eq('tenant_id', dossier.tenant_id)
+    .eq('is_active', true)
+    .single()
+
+  if (!waConfig) {
+    throw new Error('WhatsApp non configuré pour ce tenant')
+  }
+
+  // Récupérer ou créer un thread
+  const { data: threadData } = await supabase
+    .rpc('get_active_thread', { p_dossier_id: input.dossierId })
+
+  const threadId = threadData || crypto.randomUUID()
+
+  // Créer le message
+  const { data, error } = await supabase
+    .from('dossier_messages')
+    .insert({
+      dossier_id: input.dossierId,
+      thread_id: threadId,
+      direction: 'outbound',
+      sender_type: 'advisor',
+      sender_id: currentUser.id,
+      sender_email: currentUser.email,
+      sender_name: `${currentUser.first_name} ${currentUser.last_name}`,
+      recipient_email: input.recipientPhone,  // Téléphone dans le champ email
+      recipient_name: input.recipientName || null,
+      subject: null,  // WhatsApp n'a pas de sujet
+      body_text: input.bodyText,
+      body_html: null,
+      attachments: [],
+      channel: 'whatsapp',
+      ai_suggestion_id: input.aiSuggestionId || null,
+      ai_assisted: !!input.aiSuggestionId,
+      status: 'queued',
+    })
+    .select()
+    .single()
+
+  if (error) {
+    console.error('Error creating WhatsApp message:', error)
+    throw new Error('Failed to create WhatsApp message')
+  }
+
+  // Mettre à jour la suggestion IA si utilisée
+  if (input.aiSuggestionId) {
+    await supabase
+      .from('email_ai_suggestions')
+      .update({
+        status: 'accepted',
+        accepted_at: new Date().toISOString(),
+        final_body: input.bodyText,
+      })
+      .eq('id', input.aiSuggestionId)
+  }
+
+  // Mettre à jour last_activity_at du dossier
+  await supabase
+    .from('dossiers')
+    .update({ last_activity_at: new Date().toISOString() })
+    .eq('id', input.dossierId)
+
+  // ============================================================
+  // ENVOI RÉEL VIA TWILIO
+  // ============================================================
+
+  const { sendWhatsApp } = await import('@/lib/whatsapp/twilio')
+
+  const result = await sendWhatsApp({
+    to: input.recipientPhone,
+    from: waConfig.whatsapp_number,
+    body: input.bodyText,
+    mediaUrls: input.mediaUrls,
+    tenantId: dossier.tenant_id,
+  })
+
+  // Mettre à jour le statut selon le résultat
+  if (result.success) {
+    await supabase
+      .from('dossier_messages')
+      .update({
+        status: 'sent',
+        whatsapp_message_sid: result.messageSid,
+        external_message_id: result.messageSid,
+      })
+      .eq('id', data.id)
+  } else {
+    await supabase
+      .from('dossier_messages')
+      .update({
+        status: 'failed',
+        error_message: result.error,
+      })
+      .eq('id', data.id)
+
+    console.error('WhatsApp send failed:', result.error)
+  }
+
+  revalidatePath(`/admin/dossiers/${input.dossierId}`)
+  return data
+}
+
 export async function markMessageAsRead(messageId: string) {
   const supabase = await createClient()
 
@@ -377,7 +517,7 @@ export async function generateAISuggestion(input: {
       *,
       participants:dossier_participants(
         is_lead,
-        participant:participants(first_name, last_name, email)
+        participant:participants!dossier_participants_participant_id_fkey(first_name, last_name, email)
       )
     `)
     .eq('id', input.dossierId)

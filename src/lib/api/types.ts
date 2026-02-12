@@ -75,7 +75,9 @@ export interface Trip {
   formulas?: Formula[];
   // Presentation fields
   description_short?: string;
+  description_html?: string;
   description_tone?: DescriptionTone;
+  slug?: string;
   highlights?: TripHighlight[];
   inclusions?: InclusionItem[];
   exclusions?: InclusionItem[];
@@ -84,10 +86,74 @@ export interface Trip {
   info_booking_conditions?: string;
   info_cancellation_policy?: string;
   info_additional?: string;
+  // Rich text HTML versions
+  info_general_html?: string;
+  info_formalities_html?: string;
+  info_booking_conditions_html?: string;
+  info_cancellation_policy_html?: string;
+  info_additional_html?: string;
+  // Roadbook
+  roadbook_intro_html?: string;
   map_config?: Record<string, unknown>;
+  // Room demand
+  room_demand_json?: RoomDemandEntry[];
   // Translation fields
   language?: string;
   source_trip_id?: number;
+  // Publication
+  sent_at?: string;
+  // Enriched fields (from list API)
+  hero_photo_url?: string;
+  cotations_summary?: CotationSummary[];
+}
+
+export interface CotationSummary {
+  id: number;
+  name: string;
+  mode: string;  // "range" or "custom"
+  tarification_mode?: string;  // "range_web", "per_person", "per_group", "service_list", "enumeration"
+  price_label?: string;  // e.g. "1 250 €/pers"
+}
+
+// Selection options (for "Sélectionner" flow)
+export interface SelectionEntry {
+  pax_label?: string;
+  selling_price?: number;
+  pax_count?: number;
+}
+
+export interface SelectionCotation {
+  id: number;
+  name: string;
+  mode: string;
+  tarification_mode?: string;
+  price_label?: string;
+  entries: SelectionEntry[];
+}
+
+export interface SelectionOptionsResponse {
+  trip_id: number;
+  trip_name: string;
+  cotations: SelectionCotation[];
+}
+
+export interface SelectTripRequest {
+  cotation_id: number;
+  final_pax_count?: number;
+}
+
+export interface PublishTripResponse {
+  trip: Trip;
+  email_sent: boolean;
+}
+
+export interface SelectTripResponse {
+  trip: Trip;
+  other_trips_cancelled: number;
+}
+
+export interface DeselectTripResponse {
+  trips_restored: number;
 }
 
 export interface TripDay {
@@ -183,7 +249,7 @@ export interface TripPaxConfig {
 }
 
 // Formula and Item types
-export type BlockType = 'text' | 'activity' | 'accommodation' | 'transport' | 'service';
+export type BlockType = 'text' | 'activity' | 'accommodation' | 'transport' | 'service' | 'roadbook';
 
 /** Modes de déplacement pour les blocs transport */
 export type TransportMode =
@@ -239,9 +305,17 @@ export interface Formula {
   block_type?: BlockType;
   parent_block_id?: number | null;
   condition_id?: number | null;
+  // Template tracking
+  is_template?: boolean;
+  template_source_id?: number | null;
+  template_source_version?: number | null;
+  template_version?: number;
   children?: Formula[];
   items?: Item[];
 }
+
+// Type alias used by hooks (matches backend FormulaResponse)
+export type FormulaResponse = Formula;
 
 // Condition system: tenant-level conditions with options
 export interface ConditionOption {
@@ -309,6 +383,8 @@ export interface Item {
   price_includes_vat?: boolean;
   /** Which pax categories count for selecting the price tier (comma-separated, null = use ratio_categories) */
   tier_categories?: string;
+  /** Per-category absolute prices, e.g. {"adult": 2500, "teen": 1800, "child": 900, "guide": 0} */
+  category_prices_json?: Record<string, number>;
   sort_order?: number;
   notes?: string;
   cost_nature?: CostNature;
@@ -334,6 +410,8 @@ export interface ItemPriceTier {
   unit_cost: number;
   /** Category-specific % adjustments, e.g. {"child": -10, "baby": -100} */
   category_adjustments_json?: Record<string, number>;
+  /** Per-category absolute prices (priority over % adjustments), e.g. {"adult": 2500, "teen": 1800} */
+  category_prices_json?: Record<string, number>;
   sort_order?: number;
 }
 
@@ -350,6 +428,20 @@ export interface PaxCategory {
   is_active: boolean;
   is_system: boolean;
   sort_order: number;
+}
+
+// Country VAT Rate
+export interface CountryVatRate {
+  id: number;
+  country_code: string;
+  country_name?: string | null;
+  vat_rate_standard: number;
+  vat_rate_hotel?: number | null;
+  vat_rate_restaurant?: number | null;
+  vat_rate_transport?: number | null;
+  vat_rate_activity?: number | null;
+  vat_calculation_mode: 'on_margin' | 'on_selling_price';
+  is_active: boolean;
 }
 
 // Supplier types
@@ -551,6 +643,9 @@ export interface Supplier {
 
   // ===== Classification (pour hébergements) =====
   star_rating?: number;               // 1-5 étoiles
+
+  // ===== Pré-réservation =====
+  requires_pre_booking?: boolean;       // Ce fournisseur doit être réservé avant confirmation voyage
 
   // ===== Informations commerciales =====
   tax_id?: string;
@@ -1165,6 +1260,8 @@ export interface CreateTripDTO {
   // Exchange rates
   exchange_rate_mode?: ExchangeRateMode;
   currency_rates_json?: CurrencyRates;
+  // Room demand (default bed type allocation)
+  room_demand_json?: RoomDemandEntry[] | null;
   // Characteristics
   comfort_level?: number;
   difficulty_level?: number;
@@ -1178,7 +1275,9 @@ export interface CreateTripDTO {
   end_date?: string;
   // Presentation fields
   description_short?: string;
+  description_html?: string;
   description_tone?: DescriptionTone;
+  slug?: string;
   highlights?: TripHighlight[];
   inclusions?: InclusionItem[];
   exclusions?: InclusionItem[];
@@ -1187,6 +1286,14 @@ export interface CreateTripDTO {
   info_booking_conditions?: string;
   info_cancellation_policy?: string;
   info_additional?: string;
+  // Rich text HTML versions
+  info_general_html?: string;
+  info_formalities_html?: string;
+  info_booking_conditions_html?: string;
+  info_cancellation_policy_html?: string;
+  info_additional_html?: string;
+  // Roadbook
+  roadbook_intro_html?: string;
 }
 
 export interface UpdateTripDTO extends Partial<CreateTripDTO> {
@@ -1282,6 +1389,9 @@ export interface CreateSupplierDTO {
   tax_id?: string;
   is_vat_registered?: boolean;          // Assujetti TVA = TVA récupérable
   default_currency?: string;
+
+  // ===== Pré-réservation =====
+  requires_pre_booking?: boolean;       // Ce fournisseur doit être réservé avant confirmation voyage
 
   // ===== Entité de facturation =====
   billing_entity_name?: string;
@@ -1562,7 +1672,9 @@ export interface InclusionItem {
 // Extended Trip interface with presentation fields
 export interface TripPresentation {
   description_short?: string;
+  description_html?: string;
   description_tone?: DescriptionTone;
+  slug?: string;
   highlights?: TripHighlight[];
   inclusions?: InclusionItem[];
   exclusions?: InclusionItem[];
@@ -1571,6 +1683,11 @@ export interface TripPresentation {
   info_booking_conditions?: string;
   info_cancellation_policy?: string;
   info_additional?: string;
+  info_general_html?: string;
+  info_formalities_html?: string;
+  info_booking_conditions_html?: string;
+  info_cancellation_policy_html?: string;
+  info_additional_html?: string;
   map_config?: Record<string, unknown>;
 }
 
@@ -1694,7 +1811,9 @@ export interface TripWithPresentation extends Trip, TripPresentation {
 // Update DTO for presentation fields
 export interface UpdateTripPresentationDTO {
   description_short?: string;
+  description_html?: string;
   description_tone?: DescriptionTone;
+  slug?: string;
   highlights?: TripHighlight[];
   inclusions?: InclusionItem[];
   exclusions?: InclusionItem[];
@@ -1703,6 +1822,11 @@ export interface UpdateTripPresentationDTO {
   info_booking_conditions?: string;
   info_cancellation_policy?: string;
   info_additional?: string;
+  info_general_html?: string;
+  info_formalities_html?: string;
+  info_booking_conditions_html?: string;
+  info_cancellation_policy_html?: string;
+  info_additional_html?: string;
   map_config?: Record<string, unknown>;
 }
 
@@ -1802,6 +1926,28 @@ export interface UpdatePartnerAgencyDTO extends Partial<CreatePartnerAgencyDTO> 
 
 export type LocationType = 'city' | 'region' | 'country' | 'area' | 'neighborhood';
 
+export interface LocationPhoto {
+  id: number;
+  location_id: number;
+  url: string;
+  thumbnail_url?: string;
+  url_avif?: string;
+  url_webp?: string;
+  url_medium?: string;
+  url_large?: string;
+  lqip_data_url?: string;
+  original_filename?: string;
+  file_size?: number;
+  mime_type?: string;
+  width?: number;
+  height?: number;
+  caption?: string;
+  alt_text?: string;
+  is_main: boolean;
+  sort_order: number;
+  created_at?: string;
+}
+
 export interface Location {
   id: number;
   tenant_id: string;
@@ -1819,6 +1965,8 @@ export interface Location {
   is_active: boolean;
   // Statistiques
   accommodation_count?: number;     // Nombre d'hébergements dans cette location
+  // Photos
+  photos?: LocationPhoto[];
   created_at?: string;
   updated_at?: string;
 }
@@ -1839,6 +1987,53 @@ export interface CreateLocationDTO {
 export interface UpdateLocationDTO extends Partial<CreateLocationDTO> {
   is_active?: boolean;
 }
+
+
+// ============================================================================
+// AI Destination Suggestion Types
+// ============================================================================
+
+export interface SuggestedDestination {
+  name: string;
+  location_type: LocationType;
+  description_fr: string;
+  description_en: string;
+  sort_order: number;
+  country_code: string;
+  lat?: number;
+  lng?: number;
+  google_place_id?: string;
+  formatted_address?: string;
+  geocoding_success: boolean;
+}
+
+export interface DestinationSuggestResponse {
+  country_code: string;
+  country_name: string;
+  suggestions: SuggestedDestination[];
+  total: number;
+}
+
+export interface BulkCreateDestinationsRequest {
+  destinations: Array<{
+    name: string;
+    location_type: string;
+    country_code: string;
+    description_fr: string;
+    description_en: string;
+    sort_order: number;
+    lat?: number;
+    lng?: number;
+    google_place_id?: string;
+  }>;
+}
+
+export interface BulkCreateDestinationsResponse {
+  created: number;
+  locations: Location[];
+  content_entities_created: number;
+}
+
 
 // ============================================================================
 // Service Template Types (Journées types et Formules types)
@@ -2139,6 +2334,12 @@ export interface UpdateAccommodationPhotoDTO {
   alt_text?: string;
   is_main?: boolean;
   sort_order?: number;
+}
+
+// ─── Room Demand ─────────────────────────────────────────────────────
+export interface RoomDemandEntry {
+  bed_type: RoomBedType;
+  qty: number;
 }
 
 /**
@@ -2894,4 +3095,524 @@ export interface PaginatedResponse<T> {
   page: number;
   page_size: number;
   total_pages: number;
+}
+
+// ============================================================================
+// Cotation Types (Named quotation profiles)
+// ============================================================================
+
+export type CotationStatus = 'draft' | 'calculating' | 'calculated' | 'error';
+
+export type CotationMode = 'range' | 'custom';
+
+export interface CotationPaxConfig {
+  label: string;
+  adult: number;
+  teen?: number;
+  child?: number;
+  baby?: number;
+  guide: number;
+  driver: number;
+  tour_leader?: number;
+  cook?: number;
+  dbl: number;
+  sgl: number;
+  twn?: number;
+  tpl?: number;
+  fam?: number;
+  exb?: number;
+  cnt?: number;
+  total_pax: number;
+  margin_override_pct?: number;
+}
+
+export interface CotationPaxResult {
+  label: string;
+  args_label: string;
+  margin_default: number;
+  total_pax: number;
+  paying_pax: number;
+  args: Record<string, number>;
+  days: CotationDayDetail[];
+  transversal_formulas?: CotationFormulaDetail[];
+  total_cost: number;
+  total_price: number;
+  total_profit: number;
+  cost_per_person: number;
+  price_per_person: number;
+  price_per_paying_person: number;
+  margin_pct: number;
+  vat?: CotationVatDetail | null;
+  commissions?: CotationCommissionDetail | null;
+  price_ttc: number;
+}
+
+export interface CotationDayDetail {
+  day_id: number;
+  day_number: number;
+  title: string | null;
+  formulas: CotationFormulaDetail[];
+  total_cost: number;
+  total_price: number;
+}
+
+export interface CotationFormulaDetail {
+  formula_id: number;
+  formula_name: string;
+  items: CotationItemDetail[];
+  total_cost: number;
+  total_price: number;
+}
+
+export interface CotationItemDetail {
+  item_id: number;
+  item_name: string;
+  cost_nature_code: string;
+  unit_cost_local: number;
+  unit_cost: number;
+  quantity: number;
+  subtotal_cost_local: number;
+  subtotal_cost: number;
+  unit_price: number;
+  subtotal_price: number;
+  margin_applied: number;
+  pricing_method: string;
+  item_currency: string;
+  exchange_rate: number;
+  vat_recoverable: number;
+  vat_surcharge: number;
+}
+
+export interface CotationVatDetail {
+  margin: number;
+  vat_base: number;
+  vat_amount: number;
+  vat_recoverable: number;
+  net_vat: number;
+  price_ttc: number;
+}
+
+export interface CotationCommissionDetail {
+  gross_price: number;
+  primary_commission: number;
+  primary_commission_label: string;
+  secondary_commission: number;
+  secondary_commission_label: string;
+  total_commissions: number;
+  net_price: number;
+}
+
+export interface CotationResults {
+  trip_id: number;
+  trip_name: string;
+  currency: string;
+  margin_type: string;
+  default_margin_pct: number;
+  pax_configs: CotationPaxResult[];
+  warnings: string[];
+  missing_exchange_rates: string[];
+}
+
+export interface TripCotation {
+  id: number;
+  trip_id: number;
+  name: string;
+  sort_order: number;
+  mode: CotationMode;
+  condition_selections: Record<string, number>;
+  min_pax: number;
+  max_pax: number;
+  pax_configs_json: CotationPaxConfig[];
+  room_demand_override?: RoomDemandEntry[] | null;
+  results_json?: CotationResults | null;
+  tarification_json?: TarificationData | null;
+  status: CotationStatus;
+  calculated_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- Tarification types ---
+
+export type TarificationMode = 'range_web' | 'per_person' | 'per_group' | 'service_list' | 'enumeration';
+
+export interface TarificationData {
+  mode: TarificationMode;
+  entries: TarificationEntry[];
+  validity_date?: string | null; // ISO date (YYYY-MM-DD) — optional tariff expiry
+}
+
+export interface RangeWebEntry {
+  pax_label: string;
+  pax_min: number;
+  pax_max: number;
+  selling_price: number;
+}
+
+export interface PerPersonEntry {
+  price_per_person: number;
+  total_pax: number;
+}
+
+export interface PerGroupEntry {
+  group_price: number;
+  total_pax: number;
+}
+
+export interface ServiceListEntry {
+  label: string;
+  pax: number;
+  price_per_person: number;
+  cumulative_pax?: number;
+}
+
+export interface EnumerationEntry {
+  label: string;
+  unit_price: number;
+  quantity: number;
+  cumulative_pax?: number;
+}
+
+export type TarificationEntry = RangeWebEntry | PerPersonEntry | PerGroupEntry | ServiceListEntry | EnumerationEntry;
+
+export interface TarificationComputedLine {
+  label?: string | null;
+  selling_price: number;
+  total_cost: number;
+  margin_total: number;
+  margin_pct: number;
+  primary_commission_amount?: number;
+  secondary_commission_amount?: number;
+  commission_amount: number;
+  agency_selling_price?: number;
+  margin_after_commission: number;
+  vat_forecast: number;
+  vat_recoverable: number;
+  net_vat: number;
+  margin_nette: number;
+  selling_price_per_person?: number;
+  cost_per_person?: number;
+  price_per_person?: number;
+  paying_pax?: number;
+  pax?: number;
+  unit_price?: number;
+  quantity?: number;
+  range_label?: string;
+}
+
+export interface TarificationComputeResult {
+  lines: TarificationComputedLine[];
+  totals: TarificationComputedLine;
+}
+
+export interface CreateCotationDTO {
+  name: string;
+  condition_selections?: Record<string, number>;
+  mode?: CotationMode;
+  // Mode range
+  min_pax?: number;
+  max_pax?: number;
+  // Mode custom
+  adult?: number;
+  teen?: number;
+  child?: number;
+  baby?: number;
+  guide?: number;      // undefined = auto-calculate
+  driver?: number;     // undefined = auto-calculate
+  // Room demand override (optional, both modes)
+  room_demand_override?: RoomDemandEntry[];
+}
+
+export interface UpdateCotationDTO {
+  name?: string;
+  condition_selections?: Record<string, number>;
+  min_pax?: number;
+  max_pax?: number;
+  pax_configs_json?: CotationPaxConfig[];
+  sort_order?: number;
+  room_demand_override?: RoomDemandEntry[];
+}
+
+// ============================================================================
+// Invoice / Facturation Types
+// ============================================================================
+
+export type InvoiceType = 'DEV' | 'PRO' | 'FA' | 'AV';
+export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'cancelled';
+export type VatRegime = 'exempt' | 'margin';
+export type InvoiceLineType = 'service' | 'deposit' | 'discount' | 'fee' | 'insurance';
+export type InvoicePaymentType = 'deposit' | 'balance' | 'full';
+export type InvoicePaymentLinkStatus = 'pending' | 'paid' | 'overdue' | 'cancelled';
+
+// Réforme e-facture 2026
+export type OperationCategory = 'LB' | 'PS' | 'LBPS';
+export type ElectronicFormat = 'facturx_minimum' | 'facturx_basic' | 'facturx_en16931';
+export type PaTransmissionStatus = 'draft' | 'pending' | 'transmitted' | 'accepted' | 'rejected';
+
+export const OPERATION_CATEGORY_LABELS: Record<OperationCategory, string> = {
+  LB: 'Livraison de biens',
+  PS: 'Prestation de services',
+  LBPS: 'Livraison de biens et prestation de services',
+};
+
+export const PA_TRANSMISSION_STATUS_LABELS: Record<PaTransmissionStatus, string> = {
+  draft: 'Brouillon',
+  pending: 'En attente',
+  transmitted: 'Transmis',
+  accepted: 'Accepté',
+  rejected: 'Rejeté',
+};
+
+export const INVOICE_TYPE_LABELS: Record<InvoiceType, string> = {
+  DEV: 'Devis',
+  PRO: 'Proforma',
+  FA: 'Facture',
+  AV: 'Avoir',
+};
+
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  draft: 'Brouillon',
+  sent: 'Envoyé',
+  paid: 'Payé',
+  cancelled: 'Annulé',
+};
+
+export interface InvoiceLine {
+  id: number;
+  sort_order: number;
+  description: string;
+  details?: string | null;
+  quantity: number;
+  unit_price_ttc: number;
+  total_ttc: number;
+  line_type: InvoiceLineType;
+  created_at: string;
+}
+
+export interface InvoicePaymentLink {
+  id: number;
+  payment_type: InvoicePaymentType;
+  amount: number;
+  due_date: string;
+  status: InvoicePaymentLinkStatus;
+  paid_at?: string | null;
+  paid_amount?: number | null;
+  payment_method?: string | null;
+  payment_ref?: string | null;
+}
+
+export interface InvoiceSummary {
+  id: number;
+  type: InvoiceType;
+  number: string;
+  status: InvoiceStatus;
+  client_name?: string | null;
+  client_company?: string | null;
+  issue_date: string;
+  due_date?: string | null;
+  total_ttc: number;
+  deposit_amount: number;
+  balance_amount: number;
+  currency: string;
+  vat_regime?: VatRegime | null;
+  pdf_url?: string | null;
+  parent_invoice_id?: number | null;
+  dossier_id?: string | null;
+  pax_count?: number | null;
+  created_at: string;
+}
+
+export interface Invoice {
+  id: number;
+  type: InvoiceType;
+  number: string;
+  year: number;
+  sequence: number;
+  status: InvoiceStatus;
+  // Client
+  client_type?: string | null;
+  client_name?: string | null;
+  client_email?: string | null;
+  client_phone?: string | null;
+  client_company?: string | null;
+  client_siret?: string | null;
+  client_vat_number?: string | null;
+  client_address?: string | null;
+  client_siren?: string | null;
+  // Delivery address (réforme 2026)
+  delivery_address_line1?: string | null;
+  delivery_address_city?: string | null;
+  delivery_address_postal_code?: string | null;
+  delivery_address_country?: string | null;
+  // References
+  dossier_id?: string | null;
+  trip_id?: number | null;
+  cotation_id?: number | null;
+  parent_invoice_id?: number | null;
+  // Dates
+  issue_date: string;
+  due_date?: string | null;
+  travel_start_date?: string | null;
+  travel_end_date?: string | null;
+  // Amounts
+  total_ht: number;
+  total_ttc: number;
+  deposit_amount: number;
+  deposit_pct: number;
+  balance_amount: number;
+  currency: string;
+  // VAT
+  vat_regime?: VatRegime | null;
+  vat_rate: number;
+  vat_amount: number;
+  vat_legal_mention?: string | null;
+  // Réforme e-facture 2026
+  operation_category?: string | null;
+  vat_on_debits?: boolean | null;
+  electronic_format?: string | null;
+  pa_transmission_status?: string | null;
+  pa_transmission_date?: string | null;
+  pa_transmission_id?: string | null;
+  // Payment
+  payment_method?: string | null;
+  payment_ref?: string | null;
+  paid_at?: string | null;
+  paid_amount?: number | null;
+  // PDF
+  pdf_url?: string | null;
+  pdf_generated_at?: string | null;
+  // Cancellation
+  cancelled_at?: string | null;
+  cancellation_reason?: string | null;
+  // Pax / insured persons (for Chapka insurance)
+  pax_count?: number | null;
+  pax_names?: string | null; // JSON string of participant names
+  // Meta
+  notes?: string | null;
+  client_notes?: string | null;
+  created_by_id?: string | null;
+  sent_at?: string | null;
+  sent_to_email?: string | null;
+  created_at: string;
+  updated_at: string;
+  // Nested
+  lines: InvoiceLine[];
+  payment_links: InvoicePaymentLink[];
+}
+
+export interface CreateInvoiceDTO {
+  dossier_id: string;
+  type: InvoiceType;
+  total_ttc?: number;
+  cost_ht?: number;
+  deposit_pct?: number;
+  notes?: string;
+  client_notes?: string;
+  lines?: Array<{
+    description: string;
+    details?: string;
+    quantity?: number;
+    unit_price_ttc: number;
+    line_type?: InvoiceLineType;
+  }>;
+  // Dates d'échéance (optionnel — sinon calculées automatiquement)
+  deposit_due_date?: string; // ISO date: YYYY-MM-DD
+  balance_due_date?: string; // ISO date: YYYY-MM-DD
+  // Client override (when invoicing a specific participant instead of lead)
+  client_name?: string;
+  client_email?: string;
+  client_phone?: string;
+  client_address?: string;
+  // Réforme e-facture 2026
+  client_siren?: string;
+  delivery_address_line1?: string;
+  delivery_address_city?: string;
+  delivery_address_postal_code?: string;
+  delivery_address_country?: string;
+  operation_category?: string;
+  // Pax / insured persons (for Chapka insurance)
+  pax_count?: number;
+  pax_names?: string[];
+}
+
+export interface UpdateInvoiceDTO {
+  client_name?: string;
+  client_email?: string;
+  client_phone?: string;
+  client_company?: string;
+  client_address?: string;
+  client_siret?: string;
+  due_date?: string;
+  deposit_pct?: number;
+  notes?: string;
+  client_notes?: string;
+  // Réforme e-facture 2026
+  client_siren?: string;
+  delivery_address_line1?: string;
+  delivery_address_city?: string;
+  delivery_address_postal_code?: string;
+  delivery_address_country?: string;
+  operation_category?: string;
+  // Pax / insured persons (for Chapka insurance)
+  pax_count?: number;
+  pax_names?: string[];
+}
+
+// ============================================================================
+// Trip Insurance Types (Chapka READY)
+// ============================================================================
+
+export type InsuranceType = 'assistance' | 'annulation' | 'multirisques';
+export type InsuranceStatus = 'quoted' | 'active' | 'cancelled';
+
+export const INSURANCE_TYPE_LABELS: Record<InsuranceType, string> = {
+  assistance: 'Assistance',
+  annulation: 'Annulation',
+  multirisques: 'Multirisques',
+};
+
+export interface TripInsurance {
+  id: number;
+  dossier_id: string;
+  invoice_id?: number | null;
+  insurance_type: InsuranceType;
+  provider: string;
+  policy_number?: string | null;
+  premium_amount?: number | null;
+  commission_pct: number;
+  commission_amount?: number | null;
+  currency: string;
+  status: InsuranceStatus;
+  start_date?: string | null;
+  end_date?: string | null;
+  pax_count?: number | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ============================================================================
+// Forex Hedge Types (Kantox READY)
+// ============================================================================
+
+export type ForexHedgeType = 'deposit' | 'balance';
+export type ForexHedgeStatus = 'pending' | 'executed' | 'cancelled';
+
+export interface ForexHedge {
+  id: number;
+  dossier_id: string;
+  invoice_id?: number | null;
+  hedge_type: ForexHedgeType;
+  provider: string;
+  reference?: string | null;
+  from_currency: string;
+  to_currency: string;
+  amount: number;
+  rate?: number | null;
+  purchase_date?: string | null;
+  executed_at?: string | null;
+  status: ForexHedgeStatus;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
 }

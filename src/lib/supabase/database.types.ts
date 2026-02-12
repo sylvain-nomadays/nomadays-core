@@ -29,6 +29,8 @@ export type DossierStatus =
   | 'quote_in_progress'
   | 'quote_sent'
   | 'negotiation'
+  | 'non_reactive'
+  | 'option'
   | 'confirmed'
   | 'deposit_paid'
   | 'fully_paid'
@@ -1231,6 +1233,11 @@ export interface Database {
           is_client_visible: boolean
           uploaded_by: string | null
           created_at: string
+          price_total: number | null
+          price_per_person: number | null
+          currency: string
+          published_at: string | null
+          published_by: string | null
         }
         Insert: {
           id?: string
@@ -1245,6 +1252,11 @@ export interface Database {
           is_client_visible?: boolean
           uploaded_by?: string | null
           created_at?: string
+          price_total?: number | null
+          price_per_person?: number | null
+          currency?: string
+          published_at?: string | null
+          published_by?: string | null
         }
         Update: {
           id?: string
@@ -1259,6 +1271,11 @@ export interface Database {
           is_client_visible?: boolean
           uploaded_by?: string | null
           created_at?: string
+          price_total?: number | null
+          price_per_person?: number | null
+          currency?: string
+          published_at?: string | null
+          published_by?: string | null
         }
       }
       events: {

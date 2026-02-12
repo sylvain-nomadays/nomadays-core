@@ -6,11 +6,14 @@ import { useApi, useMutation } from './useApi';
 import type {
   Location,
   LocationType,
+  LocationPhoto,
   CreateLocationDTO,
   UpdateLocationDTO,
   PaginatedResponse,
   GeocodeResult,
   PlaceAutocompleteResult,
+  DestinationSuggestResponse,
+  BulkCreateDestinationsResponse,
 } from '@/lib/api/types';
 
 // ============================================================================
@@ -214,4 +217,221 @@ export function useLocationsByIds(ids: number[]) {
   }, [ids]);
 
   return useApi(fetcher, { immediate: ids.length > 0 });
+}
+
+
+// ============================================================================
+// Hooks pour les Suggestions IA de Destinations
+// ============================================================================
+
+/**
+ * Hook pour demander des suggestions de destinations via Claude AI.
+ * Appelle POST /locations/suggest avec { country_code, count }.
+ * Retourne ~20 destinations géocodées pour review par l'admin.
+ */
+export function useSuggestDestinations() {
+  const mutationFn = useCallback(
+    async (params: { country_code: string; count?: number }) => {
+      return apiClient.post<DestinationSuggestResponse>('/locations/suggest', {
+        country_code: params.country_code,
+        count: params.count || 20,
+      });
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook pour créer en bulk les destinations sélectionnées.
+ * Crée Location + ContentEntity (draft) + ContentTranslations (FR+EN) pour chaque.
+ */
+export function useBulkCreateDestinations() {
+  const mutationFn = useCallback(
+    async (params: {
+      destinations: Array<{
+        name: string;
+        location_type: string;
+        country_code: string;
+        description_fr: string;
+        description_en: string;
+        sort_order: number;
+        lat?: number;
+        lng?: number;
+        google_place_id?: string;
+      }>;
+    }) => {
+      return apiClient.post<BulkCreateDestinationsResponse>(
+        '/locations/bulk-create',
+        params
+      );
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+
+// ============================================================================
+// Hooks pour les Photos de Location
+// ============================================================================
+
+/**
+ * Hook pour lister les photos d'une location
+ */
+export function useLocationPhotos(locationId: number | null) {
+  const fetcher = useCallback(async () => {
+    if (!locationId) return [];
+    return apiClient.get<LocationPhoto[]>(`/locations/${locationId}/photos`);
+  }, [locationId]);
+
+  return useApi(fetcher, { immediate: !!locationId });
+}
+
+/**
+ * Hook pour uploader une photo de location
+ */
+export function useUploadLocationPhoto() {
+  const mutationFn = useCallback(
+    async ({
+      locationId,
+      file,
+      options,
+    }: {
+      locationId: number;
+      file: File;
+      options?: {
+        caption?: string;
+        alt_text?: string;
+        is_main?: boolean;
+      };
+    }) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (options?.caption) formData.append('caption', options.caption);
+      if (options?.alt_text) formData.append('alt_text', options.alt_text);
+      if (options?.is_main) formData.append('is_main', 'true');
+
+      return apiClient.upload<LocationPhoto>(
+        `/locations/${locationId}/photos`,
+        formData
+      );
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook pour supprimer une photo de location
+ */
+export function useDeleteLocationPhoto() {
+  const mutationFn = useCallback(
+    async ({ locationId, photoId }: { locationId: number; photoId: number }) => {
+      return apiClient.delete<void>(`/locations/${locationId}/photos/${photoId}`);
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook pour mettre à jour les metadata d'une photo
+ */
+export function useUpdateLocationPhoto() {
+  const mutationFn = useCallback(
+    async ({
+      locationId,
+      photoId,
+      data,
+    }: {
+      locationId: number;
+      photoId: number;
+      data: { caption?: string; alt_text?: string; is_main?: boolean; sort_order?: number };
+    }) => {
+      return apiClient.patch<LocationPhoto>(
+        `/locations/${locationId}/photos/${photoId}`,
+        data
+      );
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook pour réordonner les photos d'une location
+ */
+export function useReorderLocationPhotos() {
+  const mutationFn = useCallback(
+    async ({ locationId, photoIds }: { locationId: number; photoIds: number[] }) => {
+      return apiClient.post<void>(`/locations/${locationId}/photos/reorder`, {
+        photo_ids: photoIds,
+      });
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook pour générer une photo de location par IA (Vertex AI / Imagen 3)
+ */
+export function useGenerateLocationPhotoAI() {
+  const mutationFn = useCallback(
+    async ({
+      locationId,
+      prompt,
+      negativePrompt,
+      quality,
+      sceneType,
+      style,
+    }: {
+      locationId: number;
+      prompt?: string;
+      negativePrompt?: string;
+      quality?: 'high' | 'fast';
+      sceneType?: string;
+      style?: string;
+    }) => {
+      return apiClient.post<LocationPhoto>(
+        `/locations/${locationId}/photos/generate-ai`,
+        {
+          prompt: prompt || null,
+          negative_prompt: negativePrompt || null,
+          quality: quality || 'high',
+          scene_type: sceneType || null,
+          style: style || null,
+        }
+      );
+    },
+    []
+  );
+
+  return useMutation(mutationFn);
+}
+
+/**
+ * Hook pour charger les photos de plusieurs locations en batch.
+ * Utilisé par le circuit editor pour charger toutes les photos location d'un circuit.
+ */
+export function useLocationPhotosByIds(locationIds: number[]) {
+  const stableKey = JSON.stringify(locationIds.sort());
+
+  const fetcher = useCallback(async () => {
+    if (locationIds.length === 0) return {};
+    return apiClient.post<Record<string, LocationPhoto[]>>(
+      '/locations/photos-by-ids',
+      { location_ids: locationIds }
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stableKey]);
+
+  return useApi(fetcher, { immediate: locationIds.length > 0 });
 }

@@ -322,7 +322,7 @@ export async function getDossiersNeedingFollowUp() {
       *,
       advisor:users!dossiers_advisor_id_fkey(id, first_name, last_name, email),
       participants:dossier_participants(
-        participant:participants(id, first_name, last_name),
+        participant:participants!dossier_participants_participant_id_fkey(id, first_name, last_name),
         is_lead
       )
     `)
@@ -350,8 +350,10 @@ export function getAllowedTransitions(currentStatus: DossierStatus): DossierStat
     ignored: ['lead'], // Réactiver un dossier ignoré
     lead: ['quote_in_progress', 'ignored', 'lost'],
     quote_in_progress: ['quote_sent', 'lead', 'lost'],
-    quote_sent: ['negotiation', 'confirmed', 'lost', 'quote_in_progress'],
-    negotiation: ['quote_sent', 'confirmed', 'lost'],
+    quote_sent: ['negotiation', 'non_reactive', 'option', 'lost', 'quote_in_progress'],
+    negotiation: ['quote_sent', 'non_reactive', 'option', 'lost'],
+    non_reactive: ['negotiation', 'quote_sent', 'lost', 'archived'], // Relance ou archive
+    option: ['confirmed', 'negotiation', 'quote_sent', 'cancelled'], // Attente règlement → confirmé ou retour
     confirmed: ['deposit_paid', 'cancelled'],
     deposit_paid: ['fully_paid', 'cancelled'],
     fully_paid: ['in_trip', 'cancelled'],

@@ -156,6 +156,45 @@ export function buildRateMap(
 }
 
 /**
+ * Build a Map<bed_type, RoomRate> for a specific room category.
+ * Returns one rate per bed type (DBL, TWN, SGL, etc.)
+ *
+ * Used for room allocation: we need prices per bed type, not per room category.
+ */
+export function buildRateMapByBedType(
+  rates: RoomRate[],
+  seasonId: number | null,
+  roomCategoryId: number
+): Map<string, RoomRate> {
+  const map = new Map<string, RoomRate>();
+
+  if (!rates?.length) return map;
+
+  // Filter rates for this room category
+  const roomRates = rates.filter(
+    (r) => r.is_active && r.room_category_id === roomCategoryId
+  );
+
+  // Group by bed_type
+  const byBedType = new Map<string, RoomRate[]>();
+  for (const rate of roomRates) {
+    const existing = byBedType.get(rate.bed_type) || [];
+    existing.push(rate);
+    byBedType.set(rate.bed_type, existing);
+  }
+
+  // For each bed type, pick the best rate (exact season > default > any)
+  for (const [bedType, bedRates] of byBedType) {
+    const best = pickBestRate(bedRates, seasonId, bedType);
+    if (best) {
+      map.set(bedType, best);
+    }
+  }
+
+  return map;
+}
+
+/**
  * Pick the best rate from a set of rates for a room.
  */
 function pickBestRate(

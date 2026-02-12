@@ -45,49 +45,57 @@ export interface TravelLogisticWithDossier {
   }
 }
 
+const EXCLUDED_STATUSES = ['cancelled', 'archived', 'lost', 'ignored']
+
 export async function getArrivalsAndDepartures(
   dateFrom: string,
   dateTo: string
 ): Promise<TravelLogisticWithDossier[]> {
   const supabase = await createClient()
 
-  const { data, error } = await supabase
+  // Step 1: Fetch travel logistics in the date range
+  // Using separate queries to avoid PostgREST join issues with embedded relations
+  const { data: logisticsData, error: logError } = await supabase
     .from('travel_logistics')
-    .select(`
-      id,
-      dossier_id,
-      type,
-      transport_type,
-      transport_info,
-      scheduled_datetime,
-      location,
-      all_participants,
-      dossier:dossiers!travel_logistics_dossier_id_fkey(
-        id,
-        reference,
-        title,
-        status,
-        pax_adults,
-        pax_children
-      )
-    `)
+    .select('*')
     .gte('scheduled_datetime', `${dateFrom}T00:00:00`)
     .lte('scheduled_datetime', `${dateTo}T23:59:59`)
-    .not('dossier.status', 'in', '(cancelled,archived,lost,ignored)')
     .order('scheduled_datetime', { ascending: true })
 
-  if (error) {
-    console.error('Error fetching arrivals/departures:', error)
-    // Return empty array if table doesn't exist yet
+  if (logError) {
+    console.error('[Calendar] Error fetching logistics:', logError)
     return []
   }
 
-  // Filter out any entries where dossier is null (due to RLS or deleted)
-  // and transform the data to match our interface
-  return (data || [])
-    .filter(item => item.dossier !== null && item.dossier !== undefined)
+  if (!logisticsData || logisticsData.length === 0) {
+    console.log('[Calendar] No logistics found for range:', dateFrom, 'to', dateTo)
+    return []
+  }
+
+  console.log('[Calendar] Found', logisticsData.length, 'logistics for range', dateFrom, 'to', dateTo)
+
+  // Step 2: Fetch corresponding dossiers
+  const dossierIds = [...new Set(logisticsData.map(l => l.dossier_id))]
+  const { data: dossiersData, error: dosError } = await supabase
+    .from('dossiers')
+    .select('id, reference, title, status, pax_adults, pax_children')
+    .in('id', dossierIds)
+
+  if (dosError) {
+    console.error('[Calendar] Error fetching dossiers:', dosError)
+    return []
+  }
+
+  // Step 3: Join in JS and filter by dossier status
+  const dossierMap = new Map(
+    (dossiersData || []).map(d => [d.id, d])
+  )
+
+  return logisticsData
     .map(item => {
-      const dossier = Array.isArray(item.dossier) ? item.dossier[0] : item.dossier
+      const dossier = dossierMap.get(item.dossier_id)
+      if (!dossier) return null
+      if (EXCLUDED_STATUSES.includes(dossier.status)) return null
       return {
         id: item.id,
         dossier_id: item.dossier_id,
@@ -98,15 +106,16 @@ export async function getArrivalsAndDepartures(
         location: item.location,
         all_participants: item.all_participants,
         dossier: {
-          id: dossier?.id || '',
-          reference: dossier?.reference || '',
-          title: dossier?.title || '',
-          status: dossier?.status || '',
-          pax_adults: dossier?.pax_adults || 0,
-          pax_children: dossier?.pax_children || 0,
+          id: dossier.id,
+          reference: dossier.reference || '',
+          title: dossier.title || '',
+          status: dossier.status || '',
+          pax_adults: dossier.pax_adults || 0,
+          pax_children: dossier.pax_children || 0,
         }
       }
     })
+    .filter((item): item is TravelLogisticWithDossier => item !== null)
 }
 
 // Get arrivals/departures for a specific dossier

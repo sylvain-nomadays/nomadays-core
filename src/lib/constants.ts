@@ -44,11 +44,25 @@ export const DOSSIER_STATUSES: {
     description: 'Discussion en cours',
   },
   {
-    value: 'confirmed',
-    label: 'Confirmé',
+    value: 'non_reactive',
+    label: 'Non réactif',
+    color: '#9CA3AF',
+    bgColor: 'bg-gray-100 border-gray-300',
+    description: 'Client ne répond pas, relance nécessaire',
+  },
+  {
+    value: 'option',
+    label: 'Option',
     color: '#0FB6BC',
     bgColor: 'bg-cyan-50 border-cyan-200',
-    description: 'Voyage confirmé',
+    description: 'Circuit sélectionné, en attente de règlement',
+  },
+  {
+    value: 'confirmed',
+    label: 'Confirmé',
+    color: '#10B981',
+    bgColor: 'bg-emerald-50 border-emerald-200',
+    description: 'Acompte reçu, voyage confirmé',
   },
   {
     value: 'deposit_paid',
@@ -108,7 +122,7 @@ export const ACTIVE_STATUSES = DOSSIER_STATUSES.filter((s) =>
 
 // Pipeline statuses for Kanban view
 export const PIPELINE_STATUSES = DOSSIER_STATUSES.filter((s) =>
-  ['lead', 'quote_in_progress', 'quote_sent', 'negotiation', 'confirmed', 'deposit_paid', 'fully_paid'].includes(s.value)
+  ['lead', 'quote_in_progress', 'quote_sent', 'negotiation', 'non_reactive', 'option', 'confirmed', 'deposit_paid', 'fully_paid'].includes(s.value)
 )
 
 // Lost reasons

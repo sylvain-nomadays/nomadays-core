@@ -12,9 +12,20 @@ import { createClient } from '@/lib/supabase/client';
 // The proxy rewrites /api/* to http://localhost:8000/*
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
-interface ApiError {
+/**
+ * API Error class — extends Error so Next.js error handlers
+ * can properly display the message (avoids [object Object]).
+ */
+export class ApiError extends Error {
   detail: string;
   status: number;
+
+  constructor(detail: string, status: number) {
+    super(detail);
+    this.name = 'ApiError';
+    this.detail = detail;
+    this.status = status;
+  }
 }
 
 type TokenGetter = () => Promise<string | null>;
@@ -119,35 +130,31 @@ class ApiClient {
     } catch (networkError) {
       // Network error - fetch failed entirely (no response)
       console.error('[apiClient] Network error:', networkError);
-      const error: ApiError = {
-        detail: `Impossible de contacter le serveur (${this.baseUrl}). Vérifiez que le backend est démarré.`,
-        status: 0,
-      };
-      throw error;
+      throw new ApiError(
+        `Impossible de contacter le serveur (${this.baseUrl}). Vérifiez que le backend est démarré.`,
+        0,
+      );
     }
 
     if (!response.ok) {
-      const error: ApiError = {
-        detail: 'An error occurred',
-        status: response.status,
-      };
+      let detail = 'An error occurred';
 
       try {
         const data = await response.json();
-        error.detail = data.detail || error.detail;
+        detail = data.detail || detail;
       } catch {
         // Ignore JSON parse errors
       }
 
       // Handle specific error codes
       if (response.status === 401) {
-        error.detail = 'Session expirée. Veuillez vous reconnecter.';
+        detail = 'Session expirée. Veuillez vous reconnecter.';
         // Could trigger a logout here
       } else if (response.status === 403) {
-        error.detail = 'Accès non autorisé.';
+        detail = 'Accès non autorisé.';
       }
 
-      throw error;
+      throw new ApiError(detail, response.status);
     }
 
     // Handle 204 No Content
@@ -225,19 +232,16 @@ class ApiClient {
       clearTimeout(timeoutId);
 
     if (!response.ok) {
-      const error: ApiError = {
-        detail: 'An error occurred',
-        status: response.status,
-      };
+      let detail = 'An error occurred';
 
       try {
         const data = await response.json();
-        error.detail = data.detail || error.detail;
+        detail = data.detail || detail;
       } catch {
         // Ignore JSON parse errors
       }
 
-      throw error;
+      throw new ApiError(detail, response.status);
     }
 
     // Handle 204 No Content
@@ -259,5 +263,4 @@ class ApiClient {
 // Singleton instance
 export const apiClient = new ApiClient();
 
-// Export types
-export type { ApiError };
+// ApiError is exported as a class above
