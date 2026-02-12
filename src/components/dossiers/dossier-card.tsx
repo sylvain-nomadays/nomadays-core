@@ -2,36 +2,26 @@
 
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Calendar, Users, MapPin, Euro } from 'lucide-react'
+import { Calendar, Users, MapPin, Euro, Phone, FileText } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import Link from 'next/link'
-import { getStatusConfig, getTripTypeLabel } from '@/lib/constants'
-import type { Dossier, DossierStatus } from '@/lib/supabase/database.types'
+import { getCustomerStatusConfig } from '@/lib/constants'
+import type { CustomerStatus } from '@/lib/supabase/database.types'
 
-interface DossierWithRelations extends Dossier {
-  dmc?: { id: string; name: string } | null
-  advisor?: { id: string; first_name: string | null; last_name: string | null } | null
-  participants?: Array<{
-    participant: { id: string; first_name: string; last_name: string } | null
-    is_lead: boolean
-  }>
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DossierRow = Record<string, any>
 
 interface DossierCardProps {
-  dossier: DossierWithRelations
+  dossier: DossierRow
   isDragging?: boolean
 }
 
 export function DossierCard({ dossier, isDragging }: DossierCardProps) {
-  const statusConfig = getStatusConfig(dossier.status)
-  const leadParticipant = dossier.participants?.find((p) => p.is_lead)?.participant
-  const totalPax = dossier.pax_adults + dossier.pax_children + dossier.pax_infants
-
-  const advisorInitials = dossier.advisor
-    ? `${dossier.advisor.first_name?.[0] || ''}${dossier.advisor.last_name?.[0] || ''}`
-    : '?'
+  const totalPax = (dossier.pax_adults || 0) + (dossier.pax_children || 0) + (dossier.pax_infants || 0)
+  const customerConfig = dossier.lead_customer_status
+    ? getCustomerStatusConfig(dossier.lead_customer_status as CustomerStatus)
+    : null
 
   return (
     <Link href={`/admin/dossiers/${dossier.id}`}>
@@ -44,24 +34,40 @@ export function DossierCard({ dossier, isDragging }: DossierCardProps) {
           {/* Header: Reference + Trip Type */}
           <div className="flex items-center justify-between">
             <span className="text-xs font-mono text-muted-foreground">{dossier.reference}</span>
-            <Badge variant="outline" className="text-xs">
-              {getTripTypeLabel(dossier.trip_type)}
-            </Badge>
+            {dossier.trip_type && (
+              <Badge variant="outline" className="text-xs">
+                {dossier.trip_type}
+              </Badge>
+            )}
           </div>
 
-          {/* Title */}
-          <h4 className="font-medium text-sm line-clamp-2 leading-tight">{dossier.title}</h4>
+          {/* Client name + Customer status badge */}
+          <div className="flex items-center gap-2">
+            <h4 className="font-medium text-sm line-clamp-1 leading-tight flex-1">
+              {dossier.client_name || dossier.title || 'Sans nom'}
+            </h4>
+            {customerConfig && (
+              <Badge
+                variant="outline"
+                className="text-[10px] h-4 px-1.5 flex-shrink-0 whitespace-nowrap"
+                style={{ borderColor: customerConfig.color, color: customerConfig.color }}
+              >
+                {customerConfig.icon} {customerConfig.label}
+              </Badge>
+            )}
+          </div>
 
-          {/* Lead participant */}
-          {leadParticipant && (
-            <p className="text-xs text-muted-foreground truncate">
-              {leadParticipant.first_name} {leadParticipant.last_name}
+          {/* WhatsApp or Phone (instead of email) */}
+          {dossier.lead_phone && (
+            <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+              <Phone className="h-3 w-3 flex-shrink-0" />
+              {dossier.lead_phone}
             </p>
           )}
 
-          {/* Info row */}
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            {dossier.destination_countries.length > 0 && (
+          {/* Info row: destination, pax, duration, offers count */}
+          <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+            {dossier.destination_countries?.length > 0 && (
               <span className="flex items-center gap-1">
                 <MapPin className="h-3 w-3" />
                 {dossier.destination_countries.join(', ')}
@@ -73,6 +79,12 @@ export function DossierCard({ dossier, isDragging }: DossierCardProps) {
             </span>
             {dossier.duration_days && (
               <span>{dossier.duration_days}j</span>
+            )}
+            {dossier.trips_count > 0 && (
+              <span className="flex items-center gap-1">
+                <FileText className="h-3 w-3" />
+                {dossier.trips_count} offre{dossier.trips_count > 1 ? 's' : ''}
+              </span>
             )}
           </div>
 
@@ -95,36 +107,20 @@ export function DossierCard({ dossier, isDragging }: DossierCardProps) {
             )}
           </div>
 
-          {/* Footer: DMC + Advisor + Updated */}
-          <div className="flex items-center justify-between pt-2 border-t">
-            <div className="flex items-center gap-2">
-              {dossier.dmc && (
-                <Badge variant="secondary" className="text-xs h-5">
-                  {dossier.dmc.name}
-                </Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">
-                {formatDistanceToNow(new Date(dossier.updated_at), {
-                  addSuffix: true,
-                  locale: fr,
-                })}
-              </span>
-              {dossier.advisor && (
-                <Avatar className="h-5 w-5">
-                  <AvatarFallback className="text-[10px] bg-primary/10">
-                    {advisorInitials}
-                  </AvatarFallback>
-                </Avatar>
-              )}
-            </div>
+          {/* Footer: Created at */}
+          <div className="flex items-center justify-end pt-2 border-t">
+            <span className="text-xs text-muted-foreground">
+              {formatDistanceToNow(new Date(dossier.created_at), {
+                addSuffix: true,
+                locale: fr,
+              })}
+            </span>
           </div>
 
           {/* Tags */}
-          {dossier.tags.length > 0 && (
+          {dossier.tags && dossier.tags.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {dossier.tags.slice(0, 3).map((tag) => (
+              {dossier.tags.slice(0, 3).map((tag: string) => (
                 <Badge key={tag} variant="outline" className="text-[10px] h-4 px-1">
                   {tag}
                 </Badge>

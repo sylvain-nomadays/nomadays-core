@@ -3,12 +3,11 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
-import { format, formatDistanceToNow } from 'date-fns'
+import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
-import { Star, ChevronLeft, ChevronRight, ArrowUpDown, ExternalLink } from 'lucide-react'
+import { Star, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
   Table,
   TableBody,
@@ -18,34 +17,15 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { toggleDossierHot } from '@/lib/actions/dossiers'
-import { getStatusConfig, getLanguageConfig } from '@/lib/constants'
+import { getStatusConfig } from '@/lib/constants'
 import type { DossierStatus } from '@/lib/supabase/database.types'
 import { toast } from 'sonner'
 
-interface DossierWithRelations {
-  id: string
-  reference: string
-  title: string
-  status: DossierStatus
-  language: string
-  is_hot: boolean
-  created_at: string
-  last_activity_at: string
-  advisor?: {
-    id: string
-    first_name: string | null
-    last_name: string | null
-    email: string
-    avatar_url: string | null
-  } | null
-  participants?: Array<{
-    participant: { id: string; first_name: string; last_name: string; email: string } | null
-    is_lead: boolean
-  }>
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DossierRow = Record<string, any>
 
 interface DossiersListViewProps {
-  dossiers: DossierWithRelations[]
+  dossiers: DossierRow[]
   totalCount: number
 }
 
@@ -92,25 +72,22 @@ export function DossiersListView({ dossiers, totalCount }: DossiersListViewProps
             <TableRow>
               <TableHead className="w-10"></TableHead>
               <TableHead className="w-24">Réf.</TableHead>
-              <TableHead>Nom</TableHead>
-              <TableHead>Contact principal</TableHead>
+              <TableHead>Client</TableHead>
+              <TableHead>Email</TableHead>
               <TableHead className="w-32">Statut</TableHead>
-              <TableHead className="w-36">Manager</TableHead>
               <TableHead className="w-36">Créé le</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {dossiers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                   Aucun dossier trouvé
                 </TableCell>
               </TableRow>
             ) : (
               dossiers.map((dossier) => {
-                const statusConfig = getStatusConfig(dossier.status)!
-                const langConfig = getLanguageConfig(dossier.language)!
-                const leadParticipant = dossier.participants?.find((p: any) => p.is_lead)?.participant
+                const statusConfig = getStatusConfig(dossier.status as DossierStatus)
 
                 return (
                   <TableRow
@@ -131,38 +108,28 @@ export function DossiersListView({ dossiers, totalCount }: DossiersListViewProps
                       </Button>
                     </TableCell>
 
-                    {/* Reference + language */}
+                    {/* Reference */}
                     <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        <Link
-                          href={`/admin/dossiers/${dossier.id}`}
-                          className="font-mono text-sm text-primary hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {dossier.reference}
-                        </Link>
-                        <span className="text-sm">{langConfig.flag}</span>
-                      </div>
+                      <Link
+                        href={`/admin/dossiers/${dossier.id}`}
+                        className="font-mono text-sm text-primary hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {dossier.reference}
+                      </Link>
                     </TableCell>
 
-                    {/* Title */}
+                    {/* Client name */}
                     <TableCell>
-                      <span className="font-medium">{dossier.title}</span>
+                      <span className="font-medium">{dossier.client_name || 'Sans nom'}</span>
                     </TableCell>
 
-                    {/* Lead participant */}
+                    {/* Client email */}
                     <TableCell>
-                      {leadParticipant ? (
-                        <div>
-                          <p className="text-sm">
-                            {leadParticipant.first_name} {leadParticipant.last_name}
-                          </p>
-                          {leadParticipant.email && (
-                            <p className="text-xs text-muted-foreground truncate max-w-[200px]">
-                              {leadParticipant.email}
-                            </p>
-                          )}
-                        </div>
+                      {dossier.client_email ? (
+                        <p className="text-sm text-muted-foreground truncate max-w-[200px]">
+                          {dossier.client_email}
+                        </p>
                       ) : (
                         <span className="text-muted-foreground">-</span>
                       )}
@@ -170,34 +137,17 @@ export function DossiersListView({ dossiers, totalCount }: DossiersListViewProps
 
                     {/* Status */}
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        style={{
-                          borderColor: statusConfig.color,
-                          color: statusConfig.color,
-                          backgroundColor: `${statusConfig.color}10`
-                        }}
-                      >
-                        {statusConfig.label}
-                      </Badge>
-                    </TableCell>
-
-                    {/* Advisor */}
-                    <TableCell>
-                      {dossier.advisor ? (
-                        <div className="flex items-center gap-2">
-                          <Avatar className="h-6 w-6">
-                            <AvatarImage src={dossier.advisor.avatar_url || undefined} />
-                            <AvatarFallback className="text-xs">
-                              {dossier.advisor.first_name?.[0]}{dossier.advisor.last_name?.[0]}
-                            </AvatarFallback>
-                          </Avatar>
-                          <span className="text-sm">
-                            {dossier.advisor.first_name} {dossier.advisor.last_name?.[0]}.
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
+                      {statusConfig && (
+                        <Badge
+                          variant="outline"
+                          style={{
+                            borderColor: statusConfig.color,
+                            color: statusConfig.color,
+                            backgroundColor: `${statusConfig.color}10`
+                          }}
+                        >
+                          {statusConfig.label}
+                        </Badge>
                       )}
                     </TableCell>
 

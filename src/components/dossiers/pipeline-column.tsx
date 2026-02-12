@@ -3,16 +3,10 @@
 import { DossierCard } from './dossier-card'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import type { DossierStatus, Dossier } from '@/lib/supabase/database.types'
+import type { DossierStatus } from '@/lib/supabase/database.types'
 
-interface DossierWithRelations extends Dossier {
-  dmc?: { id: string; name: string } | null
-  advisor?: { id: string; first_name: string | null; last_name: string | null } | null
-  participants?: Array<{
-    participant: { id: string; first_name: string; last_name: string } | null
-    is_lead: boolean
-  }>
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DossierRow = Record<string, any>
 
 interface PipelineColumnProps {
   status: {
@@ -21,7 +15,7 @@ interface PipelineColumnProps {
     color: string
     bgColor: string
   }
-  dossiers: DossierWithRelations[]
+  dossiers: DossierRow[]
   onDragOver?: (e: React.DragEvent) => void
   onDrop?: (e: React.DragEvent, status: DossierStatus) => void
 }

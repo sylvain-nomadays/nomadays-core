@@ -5,19 +5,13 @@ import { PipelineColumn } from './pipeline-column'
 import { PIPELINE_STATUSES } from '@/lib/constants'
 import { updateDossierStatus } from '@/lib/actions/dossiers'
 import { toast } from 'sonner'
-import type { DossierStatus, Dossier } from '@/lib/supabase/database.types'
+import type { DossierStatus } from '@/lib/supabase/database.types'
 
-interface DossierWithRelations extends Dossier {
-  dmc?: { id: string; name: string } | null
-  advisor?: { id: string; first_name: string | null; last_name: string | null } | null
-  participants?: Array<{
-    participant: { id: string; first_name: string; last_name: string } | null
-    is_lead: boolean
-  }>
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DossierRow = Record<string, any>
 
 interface PipelineBoardProps {
-  initialDossiers: Record<DossierStatus, DossierWithRelations[]>
+  initialDossiers: Record<DossierStatus, DossierRow[]>
 }
 
 export function PipelineBoard({ initialDossiers }: PipelineBoardProps) {

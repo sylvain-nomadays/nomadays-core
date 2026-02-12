@@ -5,6 +5,8 @@ import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import {
   Plane,
+  PlaneLanding,
+  PlaneTakeoff,
   Train,
   Bus,
   Car,
@@ -58,6 +60,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
 import { createTravelLogistic, updateTravelLogistic, deleteTravelLogistic } from '@/lib/actions/travel-logistics'
 import { toast } from 'sonner'
@@ -155,6 +158,7 @@ interface TravelLogistic {
   scheduled_datetime: string | null
   location: string | null
   all_participants: boolean
+  participant_ids: string[] | null
   notes: string | null
 }
 
@@ -173,6 +177,8 @@ interface TravelLogisticsSectionProps {
   onToggleEnabled: (enabled: boolean) => void
   destinationCountry?: string // Code pays ISO (TH, VN, etc.)
   onLogisticsChange?: () => void
+  departureDateFrom?: string | null  // Date de départ du dossier (ISO)
+  departureDateTo?: string | null    // Date de retour du dossier (ISO)
 }
 
 const TRANSPORT_ICONS: Record<TransportType, React.ReactNode> = {
@@ -193,21 +199,49 @@ const TRANSPORT_LABELS: Record<TransportType, string> = {
   other: 'Autre',
 }
 
+function ParticipantAvatar({ participant }: { participant: Participant }) {
+  const initials = `${participant.first_name?.[0] || ''}${participant.last_name?.[0] || ''}`.toUpperCase()
+  return (
+    <div
+      className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-[10px] font-medium ring-2 ring-background"
+      title={`${participant.first_name} ${participant.last_name}`}
+    >
+      {initials}
+    </div>
+  )
+}
+
 function LogisticItem({
   item,
   onEdit,
   onDelete,
-  deleting
+  deleting,
+  participants
 }: {
   item: TravelLogistic
   onEdit: () => void
   onDelete: () => void
   deleting: boolean
+  participants: Participant[]
 }) {
+  // Resolve participant names from IDs
+  const assignedParticipants = !item.all_participants && item.participant_ids
+    ? item.participant_ids
+        .map(id => participants.find(p => p.id === id))
+        .filter(Boolean) as Participant[]
+    : []
+
+  // For flights, use landing/takeoff icons based on arrival/departure
+  const transportIcon = item.transport_type === 'flight'
+    ? (item.type === 'arrival'
+      ? <PlaneLanding className="h-4 w-4" />
+      : <PlaneTakeoff className="h-4 w-4" />)
+    : TRANSPORT_ICONS[item.transport_type]
+
   return (
     <div className="flex items-center gap-3 p-3 rounded-lg border bg-card group">
       <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10 text-primary">
-        {TRANSPORT_ICONS[item.transport_type]}
+        {transportIcon}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
@@ -232,12 +266,33 @@ function LogisticItem({
             </span>
           )}
         </div>
-        {!item.all_participants && (
+        {/* Participant avatars */}
+        {item.all_participants ? (
+          <div className="flex items-center gap-1 mt-1.5">
+            <Users className="h-3 w-3 text-muted-foreground mr-0.5" />
+            <div className="flex -space-x-1.5">
+              {participants.map((p) => (
+                <ParticipantAvatar key={p.id} participant={p} />
+              ))}
+            </div>
+          </div>
+        ) : assignedParticipants.length > 0 ? (
+          <div className="flex items-center gap-1 mt-1.5">
+            <div className="flex -space-x-1.5">
+              {assignedParticipants.map((p) => (
+                <ParticipantAvatar key={p.id} participant={p} />
+              ))}
+            </div>
+            <span className="text-[10px] text-muted-foreground ml-1">
+              {assignedParticipants.length}/{participants.length}
+            </span>
+          </div>
+        ) : !item.all_participants ? (
           <p className="text-xs text-muted-foreground mt-1">
             <Users className="h-3 w-3 inline mr-1" />
             Participants spécifiques
           </p>
-        )}
+        ) : null}
       </div>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -268,12 +323,15 @@ export function TravelLogisticsSection({
   enabled,
   onToggleEnabled,
   destinationCountry = 'TH', // Thaïlande par défaut
-  onLogisticsChange
+  onLogisticsChange,
+  departureDateFrom,
+  departureDateTo
 }: TravelLogisticsSectionProps) {
   const [arrivals, setArrivals] = useState(initialArrivals)
   const [departures, setDepartures] = useState(initialDepartures)
   const [showAddModal, setShowAddModal] = useState(false)
   const [addType, setAddType] = useState<'arrival' | 'departure'>('arrival')
+  const [editingItem, setEditingItem] = useState<TravelLogistic | null>(null)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
@@ -282,22 +340,56 @@ export function TravelLogisticsSection({
   const [transportInfo, setTransportInfo] = useState('')
   const [scheduledDatetime, setScheduledDatetime] = useState('')
   const [arrivalAirport, setArrivalAirport] = useState('')
-  const [departureAirport, setDepartureAirport] = useState('')
   const [allParticipants, setAllParticipants] = useState(true)
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([])
   const [notes, setNotes] = useState('')
   const [arrivalAirportOpen, setArrivalAirportOpen] = useState(false)
-  const [departureAirportOpen, setDepartureAirportOpen] = useState(false)
 
   // Get suggested airports for destination country
   const suggestedAirports = AIRPORTS_BY_COUNTRY[destinationCountry] || ALL_DESTINATION_AIRPORTS.slice(0, 10)
+
+  // Compute which participants are already assigned per type (arrival/departure)
+  // A participant is "covered" if they're on a logistic with all_participants=true OR in participant_ids
+  const getAssignedParticipantIds = (items: TravelLogistic[]): Set<string> => {
+    const assigned = new Set<string>()
+    for (const item of items) {
+      if (item.all_participants) {
+        // All participants are covered by this item
+        participants.forEach(p => assigned.add(p.id))
+      } else if (item.participant_ids) {
+        item.participant_ids.forEach(id => assigned.add(id))
+      }
+    }
+    return assigned
+  }
+
+  const assignedArrivalIds = getAssignedParticipantIds(arrivals)
+  const assignedDepartureIds = getAssignedParticipantIds(departures)
+  const allArrivalsAssigned = participants.length > 0 && participants.every(p => assignedArrivalIds.has(p.id))
+  const allDeparturesAssigned = participants.length > 0 && participants.every(p => assignedDepartureIds.has(p.id))
+
+  // For the add/edit form: which participants are available (not yet assigned to another item of the same type)
+  const getAvailableParticipants = (type: 'arrival' | 'departure', excludeItemId?: string): Participant[] => {
+    const items = type === 'arrival' ? arrivals : departures
+    const assigned = new Set<string>()
+    for (const item of items) {
+      if (excludeItemId && item.id === excludeItemId) continue // Don't count the item being edited
+      if (item.all_participants) {
+        participants.forEach(p => assigned.add(p.id))
+      } else if (item.participant_ids) {
+        item.participant_ids.forEach(id => assigned.add(id))
+      }
+    }
+    return participants.filter(p => !assigned.has(p.id))
+  }
 
   const resetForm = () => {
     setTransportType('flight')
     setTransportInfo('')
     setScheduledDatetime('')
     setArrivalAirport('')
-    setDepartureAirport('')
     setAllParticipants(true)
+    setSelectedParticipantIds([])
     setNotes('')
   }
 
@@ -309,50 +401,99 @@ export function TravelLogisticsSection({
     if (type === 'arrival' && firstAirport) {
       setArrivalAirport(`${firstAirport.code} - ${firstAirport.city}`)
     }
+    // Pre-fill date from dossier dates (arrival → departure_date_from, departure → departure_date_to)
+    const dossierDate = type === 'arrival' ? departureDateFrom : departureDateTo
+    if (dossierDate) {
+      // datetime-local expects "YYYY-MM-DDThh:mm" format
+      // Default to midday if no time provided
+      setScheduledDatetime(`${dossierDate}T12:00`)
+    }
+    // If some participants are already assigned, force "specific" mode
+    const available = getAvailableParticipants(type)
+    if (available.length < participants.length) {
+      setAllParticipants(false)
+    }
+    setShowAddModal(true)
+  }
+
+  const openEditModal = (item: TravelLogistic) => {
+    setEditingItem(item)
+    setAddType(item.type)
+    setTransportType(item.transport_type)
+    setTransportInfo(item.transport_info || '')
+    // Parse scheduled_datetime for datetime-local input
+    if (item.scheduled_datetime) {
+      const dt = new Date(item.scheduled_datetime)
+      const pad = (n: number) => n.toString().padStart(2, '0')
+      setScheduledDatetime(`${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`)
+    } else {
+      setScheduledDatetime('')
+    }
+    setArrivalAirport(item.location || '')
+    setAllParticipants(item.all_participants)
+    setSelectedParticipantIds(item.participant_ids || [])
+    setNotes(item.notes || '')
     setShowAddModal(true)
   }
 
   const handleSave = async () => {
     setSaving(true)
     try {
-      // Build location string
-      let location = ''
-      if (addType === 'arrival') {
-        // For arrival: destination airport (where they arrive)
-        location = arrivalAirport
-        if (departureAirport) {
-          location = `${departureAirport} → ${arrivalAirport}`
+      // Location = just the destination airport (the only one relevant for the DMC)
+      const location = arrivalAirport
+
+      if (editingItem) {
+        // UPDATE existing item
+        const updatedItem = await updateTravelLogistic(editingItem.id, dossierId, {
+          transportType,
+          transportInfo: transportInfo || undefined,
+          scheduledDatetime: scheduledDatetime || undefined,
+          location: location || undefined,
+          allParticipants,
+          participantIds: allParticipants ? undefined : selectedParticipantIds,
+          notes: notes || undefined,
+        })
+
+        // Optimistic update
+        if (updatedItem) {
+          const update = (prev: TravelLogistic[]) =>
+            prev.map(item => item.id === editingItem.id ? updatedItem as TravelLogistic : item)
+          if (editingItem.type === 'arrival') {
+            setArrivals(update)
+          } else {
+            setDepartures(update)
+          }
         }
+
+        toast.success('Modifié avec succès')
       } else {
-        // For departure: leaving from destination airport
-        location = arrivalAirport // This is actually the departure point for the return
-        if (departureAirport) {
-          location = `${arrivalAirport} → ${departureAirport}`
+        // CREATE new item
+        const newItem = await createTravelLogistic({
+          dossierId,
+          type: addType,
+          transportType,
+          transportInfo: transportInfo || undefined,
+          scheduledDatetime: scheduledDatetime || undefined,
+          location: location || undefined,
+          allParticipants,
+          participantIds: allParticipants ? undefined : selectedParticipantIds,
+          notes: notes || undefined,
+        })
+
+        // Optimistic update
+        if (newItem) {
+          if (addType === 'arrival') {
+            setArrivals(prev => [...prev, newItem as TravelLogistic])
+          } else {
+            setDepartures(prev => [...prev, newItem as TravelLogistic])
+          }
         }
+
+        toast.success(addType === 'arrival' ? 'Arrivée ajoutée' : 'Départ ajouté')
       }
 
-      const newItem = await createTravelLogistic({
-        dossierId,
-        type: addType,
-        transportType,
-        transportInfo: transportInfo || undefined,
-        scheduledDatetime: scheduledDatetime || undefined,
-        location: location || undefined,
-        allParticipants,
-        notes: notes || undefined,
-      })
-
-      // Optimistic update
-      if (newItem) {
-        if (addType === 'arrival') {
-          setArrivals(prev => [...prev, newItem as TravelLogistic])
-        } else {
-          setDepartures(prev => [...prev, newItem as TravelLogistic])
-        }
-      }
-
-      toast.success(addType === 'arrival' ? 'Arrivée ajoutée' : 'Départ ajouté')
       setShowAddModal(false)
+      setEditingItem(null)
       onLogisticsChange?.()
     } catch (error) {
       console.error('Error saving logistic:', error)
@@ -417,10 +558,12 @@ export function TravelLogisticsSection({
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-sm font-medium">Arrivée dans le pays</h4>
-                <Button variant="ghost" size="sm" onClick={() => openAddModal('arrival')}>
-                  <Plus className="h-4 w-4 mr-1" />
-                  Ajouter
-                </Button>
+                {!allArrivalsAssigned && (
+                  <Button variant="ghost" size="sm" onClick={() => openAddModal('arrival')}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    Ajouter
+                  </Button>
+                )}
               </div>
               {arrivals.length > 0 ? (
                 <div className="space-y-2">
@@ -428,7 +571,8 @@ export function TravelLogisticsSection({
                     <LogisticItem
                       key={item.id}
                       item={item}
-                      onEdit={() => {}}
+                      participants={participants}
+                      onEdit={() => openEditModal(item)}
                       onDelete={() => handleDelete(item)}
                       deleting={deletingId === item.id}
                     />
@@ -445,10 +589,12 @@ export function TravelLogisticsSection({
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-sm font-medium">Départ du pays</h4>
-                <Button variant="ghost" size="sm" onClick={() => openAddModal('departure')}>
-                  <Plus className="h-4 w-4 mr-1" />
-                  Ajouter
-                </Button>
+                {!allDeparturesAssigned && (
+                  <Button variant="ghost" size="sm" onClick={() => openAddModal('departure')}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    Ajouter
+                  </Button>
+                )}
               </div>
               {departures.length > 0 ? (
                 <div className="space-y-2">
@@ -456,7 +602,8 @@ export function TravelLogisticsSection({
                     <LogisticItem
                       key={item.id}
                       item={item}
-                      onEdit={() => {}}
+                      participants={participants}
+                      onEdit={() => openEditModal(item)}
                       onDelete={() => handleDelete(item)}
                       deleting={deletingId === item.id}
                     />
@@ -472,12 +619,17 @@ export function TravelLogisticsSection({
         )}
       </Card>
 
-      {/* Add Modal */}
-      <Dialog open={showAddModal} onOpenChange={setShowAddModal}>
+      {/* Add/Edit Modal */}
+      <Dialog open={showAddModal} onOpenChange={(open) => {
+        setShowAddModal(open)
+        if (!open) setEditingItem(null)
+      }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {addType === 'arrival' ? 'Ajouter une arrivée' : 'Ajouter un départ'}
+              {editingItem
+                ? (addType === 'arrival' ? 'Modifier l\'arrivée' : 'Modifier le départ')
+                : (addType === 'arrival' ? 'Ajouter une arrivée' : 'Ajouter un départ')}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
@@ -528,123 +680,71 @@ export function TravelLogisticsSection({
             </div>
 
             {transportType === 'flight' && (
-              <>
-                {/* Aéroport de départ du client (d'où il vient) */}
-                <div className="space-y-2">
-                  <Label>
-                    {addType === 'arrival'
-                      ? "Aéroport de départ du client"
-                      : "Aéroport d'arrivée (retour)"}
-                  </Label>
-                  <Popover open={departureAirportOpen} onOpenChange={setDepartureAirportOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        role="combobox"
-                        className="w-full justify-between font-normal"
-                      >
-                        {departureAirport || "Sélectionner un aéroport..."}
-                        <MapPin className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-full p-0" align="start">
-                      <Command>
-                        <CommandInput placeholder="Rechercher un aéroport..." />
-                        <CommandList>
-                          <CommandEmpty>Aucun aéroport trouvé</CommandEmpty>
-                          <CommandGroup heading="Aéroports courants">
-                            {DEPARTURE_AIRPORTS.map((airport) => (
-                              <CommandItem
-                                key={airport.code}
-                                value={`${airport.code} ${airport.name} ${airport.city}`}
-                                onSelect={() => {
-                                  setDepartureAirport(`${airport.code} - ${airport.city}`)
-                                  setDepartureAirportOpen(false)
-                                }}
-                              >
-                                <span className="font-mono mr-2">{airport.code}</span>
-                                {airport.city} - {airport.name}
-                              </CommandItem>
-                            ))}
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                  <p className="text-xs text-muted-foreground">
-                    {addType === 'arrival'
-                      ? "D'où part le client (Paris, Lyon...)"
-                      : "Où le client retourne"}
-                  </p>
-                </div>
-
-                {/* Aéroport d'arrivée (dans le pays de destination) */}
-                <div className="space-y-2">
-                  <Label>
-                    {addType === 'arrival'
-                      ? "Aéroport d'arrivée (destination) *"
-                      : "Aéroport de départ (destination) *"}
-                  </Label>
-                  <Popover open={arrivalAirportOpen} onOpenChange={setArrivalAirportOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        role="combobox"
-                        className="w-full justify-between font-normal"
-                      >
-                        {arrivalAirport || "Sélectionner un aéroport..."}
-                        <MapPin className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-full p-0" align="start">
-                      <Command>
-                        <CommandInput placeholder="Rechercher un aéroport..." />
-                        <CommandList>
-                          <CommandEmpty>Aucun aéroport trouvé</CommandEmpty>
-                          <CommandGroup heading={`Aéroports suggérés`}>
-                            {suggestedAirports.map((airport) => (
-                              <CommandItem
-                                key={airport.code}
-                                value={`${airport.code} ${airport.name} ${airport.city}`}
-                                onSelect={() => {
-                                  setArrivalAirport(`${airport.code} - ${airport.city}`)
-                                  setArrivalAirportOpen(false)
-                                }}
-                              >
-                                <span className="font-mono mr-2">{airport.code}</span>
-                                {airport.city} - {airport.name}
-                              </CommandItem>
-                            ))}
-                          </CommandGroup>
-                          <CommandGroup heading="Autres aéroports">
-                            {ALL_DESTINATION_AIRPORTS
-                              .filter(a => !suggestedAirports.find(s => s.code === a.code))
-                              .slice(0, 20)
-                              .map((airport) => (
-                              <CommandItem
-                                key={airport.code}
-                                value={`${airport.code} ${airport.name} ${airport.city}`}
-                                onSelect={() => {
-                                  setArrivalAirport(`${airport.code} - ${airport.city}`)
-                                  setArrivalAirportOpen(false)
-                                }}
-                              >
-                                <span className="font-mono mr-2">{airport.code}</span>
-                                {airport.city} - {airport.name}
-                              </CommandItem>
-                            ))}
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                  <p className="text-xs text-muted-foreground">
-                    {addType === 'arrival'
-                      ? "Où le client arrive (Bangkok, Hanoi...)"
-                      : "D'où le client repart"}
-                  </p>
-                </div>
-              </>
+              <div className="space-y-2">
+                <Label>
+                  {addType === 'arrival'
+                    ? "Aéroport d'arrivée *"
+                    : "Aéroport de départ *"}
+                </Label>
+                <Popover open={arrivalAirportOpen} onOpenChange={setArrivalAirportOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      className="w-full justify-between font-normal"
+                    >
+                      {arrivalAirport || "Sélectionner un aéroport..."}
+                      <MapPin className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Rechercher un aéroport..." />
+                      <CommandList>
+                        <CommandEmpty>Aucun aéroport trouvé</CommandEmpty>
+                        <CommandGroup heading="Aéroports suggérés">
+                          {suggestedAirports.map((airport) => (
+                            <CommandItem
+                              key={airport.code}
+                              value={`${airport.code} ${airport.name} ${airport.city}`}
+                              onSelect={() => {
+                                setArrivalAirport(`${airport.code} - ${airport.city}`)
+                                setArrivalAirportOpen(false)
+                              }}
+                            >
+                              <span className="font-mono mr-2">{airport.code}</span>
+                              {airport.city} - {airport.name}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                        <CommandGroup heading="Autres aéroports">
+                          {ALL_DESTINATION_AIRPORTS
+                            .filter(a => !suggestedAirports.find(s => s.code === a.code))
+                            .slice(0, 20)
+                            .map((airport) => (
+                            <CommandItem
+                              key={airport.code}
+                              value={`${airport.code} ${airport.name} ${airport.city}`}
+                              onSelect={() => {
+                                setArrivalAirport(`${airport.code} - ${airport.city}`)
+                                setArrivalAirportOpen(false)
+                              }}
+                            >
+                              <span className="font-mono mr-2">{airport.code}</span>
+                              {airport.city} - {airport.name}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                <p className="text-xs text-muted-foreground">
+                  {addType === 'arrival'
+                    ? "Où le client arrive dans le pays"
+                    : "D'où le client repart"}
+                </p>
+              </div>
             )}
 
             {transportType !== 'flight' && (
@@ -667,18 +767,76 @@ export function TravelLogisticsSection({
               />
             </div>
 
-            <div className="space-y-2">
-              <Label>Participants</Label>
-              <Select value={allParticipants ? 'all' : 'specific'} onValueChange={(v) => setAllParticipants(v === 'all')}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tous les participants</SelectItem>
-                  <SelectItem value="specific">Participants spécifiques</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {(() => {
+              // Compute available participants for this form (exclude those already assigned to other items of the same type)
+              const availableParticipants = getAvailableParticipants(addType, editingItem?.id)
+              // "All" option is only available if all participants are still available (no other items assigned any)
+              const canSelectAll = availableParticipants.length === participants.length
+
+              return (
+                <div className="space-y-2">
+                  <Label>Participants</Label>
+                  {canSelectAll ? (
+                    <Select
+                      value={allParticipants ? 'all' : 'specific'}
+                      onValueChange={(v) => {
+                        const isAll = v === 'all'
+                        setAllParticipants(isAll)
+                        if (isAll) setSelectedParticipantIds([])
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Tous les participants</SelectItem>
+                        <SelectItem value="specific">Participants spécifiques</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    // When some participants are already assigned, force "specific" mode
+                    <p className="text-sm text-muted-foreground">
+                      <Users className="h-4 w-4 inline mr-1" />
+                      Participants disponibles ({availableParticipants.length} restant{availableParticipants.length > 1 ? 's' : ''})
+                    </p>
+                  )}
+                  {!allParticipants && availableParticipants.length > 0 && (
+                    <div className="border rounded-md p-3 space-y-2 max-h-40 overflow-y-auto">
+                      {availableParticipants.map((p) => (
+                        <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5">
+                          <Checkbox
+                            checked={selectedParticipantIds.includes(p.id)}
+                            onCheckedChange={(checked) => {
+                              setSelectedParticipantIds(prev =>
+                                checked
+                                  ? [...prev, p.id]
+                                  : prev.filter(id => id !== p.id)
+                              )
+                            }}
+                          />
+                          {p.first_name} {p.last_name}
+                        </label>
+                      ))}
+                      {selectedParticipantIds.length === 0 && (
+                        <p className="text-xs text-muted-foreground italic">
+                          Sélectionnez au moins un participant
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {!allParticipants && availableParticipants.length === 0 && participants.length > 0 && (
+                    <p className="text-xs text-muted-foreground italic">
+                      Tous les participants sont déjà assignés
+                    </p>
+                  )}
+                  {participants.length === 0 && (
+                    <p className="text-xs text-muted-foreground italic">
+                      Aucun participant dans ce dossier
+                    </p>
+                  )}
+                </div>
+              )
+            })()}
 
             <div className="space-y-2">
               <Label>Notes</Label>
@@ -690,7 +848,7 @@ export function TravelLogisticsSection({
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddModal(false)} disabled={saving}>
+            <Button variant="outline" onClick={() => { setShowAddModal(false); setEditingItem(null) }} disabled={saving}>
               Annuler
             </Button>
             <Button onClick={handleSave} disabled={saving || !arrivalAirport}>
@@ -700,7 +858,7 @@ export function TravelLogisticsSection({
                   Enregistrement...
                 </>
               ) : (
-                'Enregistrer'
+                editingItem ? 'Enregistrer' : 'Ajouter'
               )}
             </Button>
           </DialogFooter>

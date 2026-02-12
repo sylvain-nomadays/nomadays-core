@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useEffect, useTransition } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import {
@@ -86,6 +86,15 @@ export function DossierNotesPanel({
   // Local state for optimistic updates
   const [notes, setNotes] = useState(initialNotes)
   const [personalNotes, setPersonalNotes] = useState(initialPersonalNotes)
+
+  // Sync from parent when props change (e.g. full tab creates a note)
+  useEffect(() => {
+    setNotes(initialNotes)
+  }, [initialNotes])
+
+  useEffect(() => {
+    setPersonalNotes(initialPersonalNotes)
+  }, [initialPersonalNotes])
 
   // Team notes state
   const [newTeamNote, setNewTeamNote] = useState('')

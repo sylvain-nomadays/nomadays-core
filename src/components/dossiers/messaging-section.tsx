@@ -20,7 +20,9 @@ import {
   ThumbsUp,
   ThumbsDown,
   RefreshCw,
-  Wand2
+  Wand2,
+  MessageCircle,
+  Phone
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -59,6 +61,7 @@ import {
 import {
   getDossierMessages,
   sendMessage,
+  sendWhatsAppMessage,
   getEmailTemplates,
   renderTemplate,
   generateAISuggestion,
@@ -69,11 +72,13 @@ import {
   type AISuggestion,
 } from '@/lib/actions/messaging'
 import { toast } from 'sonner'
+import { useUserRole, permissions } from '@/lib/hooks/use-user-role'
 
 interface MessagingSectionProps {
   dossierId: string
   clientEmail: string
   clientName: string
+  clientWhatsApp?: string | null      // Numéro WhatsApp du participant lead
   advisorName: string
   destination?: string
   variables?: Record<string, string>  // Variables pour les templates
@@ -116,6 +121,12 @@ function MessageBubble({ message, isLast }: { message: Message; isLast: boolean 
           <span className="text-xs text-muted-foreground">
             {format(new Date(message.created_at), 'dd MMM à HH:mm', { locale: fr })}
           </span>
+          {message.channel === 'whatsapp' && (
+            <Badge variant="outline" className="h-5 text-xs gap-1 text-green-600 border-green-300">
+              <MessageCircle className="h-3 w-3" />
+              WA
+            </Badge>
+          )}
           {message.ai_assisted && (
             <TooltipProvider>
               <Tooltip>
@@ -126,7 +137,7 @@ function MessageBubble({ message, isLast }: { message: Message; isLast: boolean 
                   </Badge>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>Rédigé avec l'assistant IA</p>
+                  <p>Rédigé avec l&apos;assistant IA</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -136,9 +147,9 @@ function MessageBubble({ message, isLast }: { message: Message; isLast: boolean 
         <Collapsible open={expanded} onOpenChange={setExpanded}>
           <div
             className={`rounded-lg p-3 ${
-              isOutbound
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted'
+              message.channel === 'whatsapp'
+                ? (isOutbound ? 'bg-green-600 text-white' : 'bg-green-50 border border-green-200')
+                : (isOutbound ? 'bg-primary text-primary-foreground' : 'bg-muted')
             }`}
           >
             {message.subject && (
@@ -286,10 +297,14 @@ export function MessagingSection({
   dossierId,
   clientEmail,
   clientName,
+  clientWhatsApp,
   advisorName,
   destination,
   variables = {},
 }: MessagingSectionProps) {
+  const { role, tenantSettings } = useUserRole()
+  const canSeeEmail = permissions.canSeeClientEmail(role, tenantSettings)
+
   const [messages, setMessages] = useState<Message[]>([])
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
   const [loading, setLoading] = useState(true)
@@ -301,6 +316,7 @@ export function MessagingSection({
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [selectedTemplate, setSelectedTemplate] = useState<EmailTemplate | null>(null)
+  const [selectedChannel, setSelectedChannel] = useState<'email' | 'whatsapp'>('email')
 
   // AI Suggestion
   const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null)
@@ -396,7 +412,7 @@ export function MessagingSection({
     }
   }
 
-  // Envoyer le message
+  // Envoyer le message (email ou WhatsApp selon le canal sélectionné)
   const handleSend = async () => {
     if (!body.trim()) {
       toast.error('Le message ne peut pas être vide')
@@ -405,24 +421,39 @@ export function MessagingSection({
 
     setSending(true)
     try {
-      const newMessage = await sendMessage({
-        dossierId,
-        recipientEmail: clientEmail,
-        recipientName: clientName,
-        subject: subject || undefined,
-        bodyText: body.replace(/<[^>]*>/g, ''), // Strip HTML for text version
-        bodyHtml: body,
-        templateId: selectedTemplate?.id,
-        aiSuggestionId: aiSuggestion?.id,
-      })
+      let newMessage
+
+      if (selectedChannel === 'whatsapp' && clientWhatsApp) {
+        // Envoi WhatsApp
+        newMessage = await sendWhatsAppMessage({
+          dossierId,
+          recipientPhone: clientWhatsApp,
+          recipientName: clientName,
+          bodyText: body,
+          aiSuggestionId: aiSuggestion?.id,
+        })
+      } else {
+        // Envoi Email (comportement existant)
+        newMessage = await sendMessage({
+          dossierId,
+          recipientEmail: clientEmail,
+          recipientName: clientName,
+          subject: subject || undefined,
+          bodyText: body.replace(/<[^>]*>/g, ''), // Strip HTML for text version
+          bodyHtml: body,
+          templateId: selectedTemplate?.id,
+          aiSuggestionId: aiSuggestion?.id,
+        })
+      }
 
       setMessages(prev => [...prev, newMessage as Message])
       setShowCompose(false)
       setSubject('')
       setBody('')
       setSelectedTemplate(null)
+      setSelectedChannel('email')
       setAiSuggestion(null)
-      toast.success('Message envoyé')
+      toast.success(selectedChannel === 'whatsapp' ? 'WhatsApp envoyé' : 'Email envoyé')
     } catch (error) {
       toast.error('Erreur lors de l\'envoi')
     } finally {
@@ -432,7 +463,13 @@ export function MessagingSection({
 
   // Répondre à un message client
   const handleReply = (message: Message) => {
-    setSubject(`Re: ${message.subject || 'Votre message'}`)
+    // Sélectionner le canal du message d'origine
+    if (message.channel === 'whatsapp' && clientWhatsApp) {
+      setSelectedChannel('whatsapp')
+    } else {
+      setSelectedChannel('email')
+      setSubject(`Re: ${message.subject || 'Votre message'}`)
+    }
     setShowCompose(true)
     // Générer une suggestion IA pour la réponse
     handleGenerateAISuggestion('reply_to_client')
@@ -468,6 +505,12 @@ export function MessagingSection({
             {messages.length > 0 && (
               <Badge variant="secondary" className="text-xs">
                 {messages.length} message{messages.length > 1 ? 's' : ''}
+              </Badge>
+            )}
+            {messages.some(m => m.channel === 'whatsapp') && (
+              <Badge variant="outline" className="text-xs text-green-600 border-green-300 gap-1">
+                <MessageCircle className="h-3 w-3" />
+                WhatsApp
               </Badge>
             )}
           </CardTitle>
@@ -562,13 +605,45 @@ export function MessagingSection({
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Mail className="h-5 w-5" />
+              {selectedChannel === 'whatsapp' ? (
+                <MessageCircle className="h-5 w-5 text-green-600" />
+              ) : (
+                <Mail className="h-5 w-5" />
+              )}
               Nouveau message à {clientName}
             </DialogTitle>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto space-y-4 py-4">
-            {/* Templates */}
+            {/* Channel Selector */}
+            {clientWhatsApp && (
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">Canal</Label>
+                <div className="flex gap-2">
+                  <Button
+                    variant={selectedChannel === 'email' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setSelectedChannel('email')}
+                    className="h-9"
+                  >
+                    <Mail className="h-4 w-4 mr-1.5" />
+                    Email
+                  </Button>
+                  <Button
+                    variant={selectedChannel === 'whatsapp' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setSelectedChannel('whatsapp')}
+                    className={`h-9 ${selectedChannel === 'whatsapp' ? 'bg-green-600 hover:bg-green-700' : 'text-green-600 border-green-300 hover:bg-green-50'}`}
+                  >
+                    <MessageCircle className="h-4 w-4 mr-1.5" />
+                    WhatsApp
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Templates (email seulement) */}
+            {selectedChannel === 'email' && (
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Templates</Label>
               <div className="flex flex-wrap gap-2">
@@ -603,10 +678,12 @@ export function MessagingSection({
                 ))}
               </div>
             </div>
+            )}
 
-            <Separator />
+            {selectedChannel === 'email' && <Separator />}
 
-            {/* Subject */}
+            {/* Subject (email seulement) */}
+            {selectedChannel === 'email' && (
             <div className="space-y-2">
               <Label htmlFor="subject">Objet</Label>
               <Input
@@ -616,6 +693,7 @@ export function MessagingSection({
                 onChange={(e) => setSubject(e.target.value)}
               />
             </div>
+            )}
 
             {/* Body */}
             <div className="space-y-2">
@@ -638,14 +716,24 @@ export function MessagingSection({
               </div>
               <Textarea
                 id="body"
-                placeholder="Votre message..."
+                placeholder={selectedChannel === 'whatsapp'
+                  ? 'Votre message WhatsApp...'
+                  : 'Votre message...'
+                }
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
-                className="min-h-[250px]"
+                className={selectedChannel === 'whatsapp' ? 'min-h-[150px]' : 'min-h-[250px]'}
               />
+              {selectedChannel === 'whatsapp' && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <MessageCircle className="h-3 w-3 text-green-600" />
+                  Message envoyé via WhatsApp à {clientWhatsApp}
+                </p>
+              )}
             </div>
 
-            {/* Attachments placeholder */}
+            {/* Attachments placeholder (email seulement) */}
+            {selectedChannel === 'email' && (
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Pièces jointes</Label>
               <Button variant="outline" size="sm" className="w-full" disabled>
@@ -653,24 +741,41 @@ export function MessagingSection({
                 Ajouter une pièce jointe (bientôt disponible)
               </Button>
             </div>
+            )}
           </div>
 
           <DialogFooter className="border-t pt-4">
             <div className="flex items-center justify-between w-full">
-              <div className="text-xs text-muted-foreground">
-                À : {clientEmail}
+              <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+                {selectedChannel === 'whatsapp' ? (
+                  <>
+                    <MessageCircle className="h-3 w-3 text-green-600" />
+                    À : {clientWhatsApp}
+                  </>
+                ) : (
+                  <>
+                    <Mail className="h-3 w-3" />
+                    À : {canSeeEmail ? clientEmail : clientName}
+                  </>
+                )}
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setShowCompose(false)}>
                   Annuler
                 </Button>
-                <Button onClick={handleSend} disabled={sending || !body.trim()}>
+                <Button
+                  onClick={handleSend}
+                  disabled={sending || !body.trim()}
+                  className={selectedChannel === 'whatsapp' ? 'bg-green-600 hover:bg-green-700' : ''}
+                >
                   {sending ? (
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : selectedChannel === 'whatsapp' ? (
+                    <MessageCircle className="h-4 w-4 mr-2" />
                   ) : (
                     <Send className="h-4 w-4 mr-2" />
                   )}
-                  Envoyer
+                  {selectedChannel === 'whatsapp' ? 'Envoyer WhatsApp' : 'Envoyer'}
                 </Button>
               </div>
             </div>

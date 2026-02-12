@@ -1,51 +1,30 @@
 'use client'
 
 import Link from 'next/link'
-import { format, formatDistanceToNow } from 'date-fns'
+import { formatDistanceToNow } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { Flame, AlertCircle, Clock, Star } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { toggleDossierHot } from '@/lib/actions/dossiers'
-import { getStatusConfig, getLanguageConfig } from '@/lib/constants'
+import { getStatusConfig } from '@/lib/constants'
 import type { DossierStatus } from '@/lib/supabase/database.types'
 import { toast } from 'sonner'
 
-interface DossierWithRelations {
-  id: string
-  reference: string
-  title: string
-  status: DossierStatus
-  language: string
-  is_hot: boolean
-  created_at: string
-  last_activity_at: string
-  advisor?: {
-    id: string
-    first_name: string | null
-    last_name: string | null
-    avatar_url: string | null
-  } | null
-  participants?: Array<{
-    participant: { id: string; first_name: string; last_name: string } | null
-    is_lead: boolean
-  }>
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DossierRow = Record<string, any>
 
 interface UrgentDossiersProps {
   data: {
-    hot: DossierWithRelations[]
-    newLeads: DossierWithRelations[]
-    inactive: DossierWithRelations[]
+    hot: DossierRow[]
+    newLeads: DossierRow[]
+    inactive: DossierRow[]
   }
 }
 
-function UrgentDossierCard({ dossier, type }: { dossier: DossierWithRelations; type: 'hot' | 'lead' | 'inactive' }) {
-  const statusConfig = getStatusConfig(dossier.status)!
-  const langConfig = getLanguageConfig(dossier.language)!
-  const leadParticipant = dossier.participants?.find((p: any) => p.is_lead)?.participant
+function UrgentDossierCard({ dossier, type }: { dossier: DossierRow; type: 'hot' | 'lead' | 'inactive' }) {
+  const statusConfig = getStatusConfig(dossier.status as DossierStatus)
 
   const handleToggleHot = async (e: React.MouseEvent) => {
     e.preventDefault()
@@ -77,19 +56,20 @@ function UrgentDossierCard({ dossier, type }: { dossier: DossierWithRelations; t
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono text-muted-foreground">{dossier.reference}</span>
-            <span className="text-sm">{langConfig.flag}</span>
-            <Badge
-              variant="outline"
-              className="text-xs h-5"
-              style={{ borderColor: statusConfig.color, color: statusConfig.color }}
-            >
-              {statusConfig.label}
-            </Badge>
+            {statusConfig && (
+              <Badge
+                variant="outline"
+                className="text-xs h-5"
+                style={{ borderColor: statusConfig.color, color: statusConfig.color }}
+              >
+                {statusConfig.label}
+              </Badge>
+            )}
           </div>
-          <p className="text-sm font-medium truncate">{dossier.title}</p>
-          {leadParticipant && (
+          <p className="text-sm font-medium truncate">{dossier.client_name || 'Sans nom'}</p>
+          {dossier.client_email && (
             <p className="text-xs text-muted-foreground truncate">
-              {leadParticipant.first_name} {leadParticipant.last_name}
+              {dossier.client_email}
             </p>
           )}
         </div>
@@ -97,22 +77,12 @@ function UrgentDossierCard({ dossier, type }: { dossier: DossierWithRelations; t
         {/* Time info */}
         <div className="text-right shrink-0">
           <p className="text-xs text-muted-foreground">
-            {type === 'inactive'
+            {type === 'inactive' && dossier.last_activity_at
               ? `Inactif depuis ${formatDistanceToNow(new Date(dossier.last_activity_at), { locale: fr })}`
               : formatDistanceToNow(new Date(dossier.created_at), { addSuffix: true, locale: fr })
             }
           </p>
         </div>
-
-        {/* Advisor */}
-        {dossier.advisor && (
-          <Avatar className="h-7 w-7 shrink-0">
-            <AvatarImage src={dossier.advisor.avatar_url || undefined} />
-            <AvatarFallback className="text-xs">
-              {dossier.advisor.first_name?.[0]}{dossier.advisor.last_name?.[0]}
-            </AvatarFallback>
-          </Avatar>
-        )}
 
         {/* Hot toggle */}
         <Button
@@ -143,7 +113,7 @@ export function UrgentDossiers({ data }: UrgentDossiersProps) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {hot.slice(0, 5).map(dossier => (
+            {hot.slice(0, 5).map((dossier: DossierRow) => (
               <UrgentDossierCard key={dossier.id} dossier={dossier} type="hot" />
             ))}
             {hot.length > 5 && (
@@ -165,7 +135,7 @@ export function UrgentDossiers({ data }: UrgentDossiersProps) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {newLeads.slice(0, 5).map(dossier => (
+            {newLeads.slice(0, 5).map((dossier: DossierRow) => (
               <UrgentDossierCard key={dossier.id} dossier={dossier} type="lead" />
             ))}
             {newLeads.length > 5 && (
@@ -187,7 +157,7 @@ export function UrgentDossiers({ data }: UrgentDossiersProps) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {inactive.slice(0, 5).map(dossier => (
+            {inactive.slice(0, 5).map((dossier: DossierRow) => (
               <UrgentDossierCard key={dossier.id} dossier={dossier} type="inactive" />
             ))}
             {inactive.length > 5 && (

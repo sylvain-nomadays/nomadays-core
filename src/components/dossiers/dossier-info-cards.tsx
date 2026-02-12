@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { format } from 'date-fns'
+import { useState, useCallback } from 'react'
+import { format, addDays, differenceInCalendarDays } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import {
   Calendar,
@@ -93,6 +93,44 @@ export function DossierInfoCards({
   const [minBudget, setMinBudget] = useState(budgetMin?.toString() || '')
   const [maxBudget, setMaxBudget] = useState(budgetMax?.toString() || '')
 
+  // ─── Date/Duration sync helpers ─────────────────────────────────
+  const handleDateFromChange = useCallback((newDateFrom: string) => {
+    setDateFrom(newDateFrom)
+    if (!newDateFrom) return
+    const from = new Date(newDateFrom)
+    // If duration exists → compute dateTo
+    const dur = parseInt(duration)
+    if (dur > 0) {
+      const to = addDays(from, dur - 1)
+      setDateTo(format(to, 'yyyy-MM-dd'))
+    } else if (dateTo) {
+      // If dateTo exists → compute duration
+      const to = new Date(dateTo)
+      if (to >= from) {
+        setDuration(String(differenceInCalendarDays(to, from) + 1))
+      }
+    }
+  }, [duration, dateTo])
+
+  const handleDateToChange = useCallback((newDateTo: string) => {
+    setDateTo(newDateTo)
+    if (!newDateTo || !dateFrom) return
+    const from = new Date(dateFrom)
+    const to = new Date(newDateTo)
+    if (to >= from) {
+      setDuration(String(differenceInCalendarDays(to, from) + 1))
+    }
+  }, [dateFrom])
+
+  const handleDurationChange = useCallback((newDuration: string) => {
+    setDuration(newDuration)
+    const dur = parseInt(newDuration)
+    if (!dur || dur <= 0 || !dateFrom) return
+    const from = new Date(dateFrom)
+    const to = addDays(from, dur - 1)
+    setDateTo(format(to, 'yyyy-MM-dd'))
+  }, [dateFrom])
+
   const totalPax = paxAdults + paxTeens + paxChildren + paxInfants
 
   const handleSaveDates = async () => {
@@ -180,7 +218,7 @@ export function DossierInfoCards({
                         <Input
                           type="date"
                           value={dateFrom}
-                          onChange={(e) => setDateFrom(e.target.value)}
+                          onChange={(e) => handleDateFromChange(e.target.value)}
                         />
                       </div>
                       <div className="space-y-1">
@@ -188,7 +226,7 @@ export function DossierInfoCards({
                         <Input
                           type="date"
                           value={dateTo}
-                          onChange={(e) => setDateTo(e.target.value)}
+                          onChange={(e) => handleDateToChange(e.target.value)}
                         />
                       </div>
                     </div>
@@ -196,8 +234,9 @@ export function DossierInfoCards({
                       <Label className="text-xs">Durée (jours)</Label>
                       <Input
                         type="number"
+                        min={1}
                         value={duration}
-                        onChange={(e) => setDuration(e.target.value)}
+                        onChange={(e) => handleDurationChange(e.target.value)}
                         placeholder="Ex: 14"
                       />
                     </div>
