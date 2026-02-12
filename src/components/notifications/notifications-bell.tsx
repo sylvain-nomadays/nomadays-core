@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -9,14 +9,14 @@ import {
   FileText,
   Clock,
   CreditCard,
-  MessageSquare,
   UserPlus,
   CheckCircle,
   XCircle,
   Plane,
   Upload,
   AtSign,
-  Loader2
+  Loader2,
+  ClipboardList,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,95 +25,132 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Separator } from '@/components/ui/separator'
-import {
-  getUserNotifications,
-  markNotificationAsRead,
-  markAllNotificationsAsRead,
-  type Notification,
-  type NotificationType
-} from '@/lib/actions/notifications'
+import { useNotifications, type NotificationItem as NotificationType } from '@/hooks/useNotifications'
 import { toast } from 'sonner'
 
 // Configuration des types de notifications
-const NOTIFICATION_CONFIG: Record<NotificationType, {
+type NotificationTypeKey =
+  | 'new_request'
+  | 'follow_up_reminder'
+  | 'payment_received'
+  | 'proposal_accepted'
+  | 'proposal_rejected'
+  | 'trip_starting_soon'
+  | 'document_uploaded'
+  | 'mention'
+  | 'assignment'
+  | 'pre_booking_request'
+  | 'pre_booking_confirmed'
+  | 'pre_booking_refused'
+
+const NOTIFICATION_CONFIG: Record<NotificationTypeKey, {
   icon: React.ReactNode
   color: string
   bgColor: string
+  label: string
 }> = {
   new_request: {
     icon: <FileText className="h-4 w-4" />,
     color: 'text-blue-600',
     bgColor: 'bg-blue-50',
+    label: 'Nouvelle demande',
   },
   follow_up_reminder: {
     icon: <Clock className="h-4 w-4" />,
     color: 'text-orange-600',
     bgColor: 'bg-orange-50',
+    label: 'Rappel de suivi',
   },
   payment_received: {
     icon: <CreditCard className="h-4 w-4" />,
     color: 'text-green-600',
     bgColor: 'bg-green-50',
+    label: 'Paiement reçu',
   },
   proposal_accepted: {
     icon: <CheckCircle className="h-4 w-4" />,
     color: 'text-green-600',
     bgColor: 'bg-green-50',
+    label: 'Proposition acceptée',
   },
   proposal_rejected: {
     icon: <XCircle className="h-4 w-4" />,
     color: 'text-red-600',
     bgColor: 'bg-red-50',
+    label: 'Proposition refusée',
   },
   trip_starting_soon: {
     icon: <Plane className="h-4 w-4" />,
     color: 'text-purple-600',
     bgColor: 'bg-purple-50',
+    label: 'Voyage imminent',
   },
   document_uploaded: {
     icon: <Upload className="h-4 w-4" />,
     color: 'text-cyan-600',
     bgColor: 'bg-cyan-50',
+    label: 'Document ajouté',
   },
   mention: {
     icon: <AtSign className="h-4 w-4" />,
     color: 'text-indigo-600',
     bgColor: 'bg-indigo-50',
+    label: 'Vous êtes mentionné',
   },
   assignment: {
     icon: <UserPlus className="h-4 w-4" />,
     color: 'text-teal-600',
     bgColor: 'bg-teal-50',
+    label: 'Nouvelle assignation',
+  },
+  pre_booking_request: {
+    icon: <ClipboardList className="h-4 w-4" />,
+    color: 'text-[#0FB6BC]',
+    bgColor: 'bg-[#E6F9FA]',
+    label: 'Demande de pré-réservation',
+  },
+  pre_booking_confirmed: {
+    icon: <CheckCircle className="h-4 w-4" />,
+    color: 'text-[#8BA080]',
+    bgColor: 'bg-[#8BA080]/10',
+    label: 'Pré-réservation confirmée',
+  },
+  pre_booking_refused: {
+    icon: <XCircle className="h-4 w-4" />,
+    color: 'text-red-600',
+    bgColor: 'bg-red-50',
+    label: 'Pré-réservation refusée',
   },
 }
 
-const NOTIFICATION_LABELS: Record<NotificationType, string> = {
-  new_request: 'New request',
-  follow_up_reminder: 'Follow up reminder',
-  payment_received: 'Payment received',
-  proposal_accepted: 'Proposal accepted',
-  proposal_rejected: 'Proposal rejected',
-  trip_starting_soon: 'Trip starting soon',
-  document_uploaded: 'Document uploaded',
-  mention: 'You were mentioned',
-  assignment: 'New assignment',
+// Default config for unknown types
+const DEFAULT_CONFIG = {
+  icon: <Bell className="h-4 w-4" />,
+  color: 'text-gray-600',
+  bgColor: 'bg-gray-50',
+  label: 'Notification',
 }
 
-function NotificationItem({
+function NotificationItemRow({
   notification,
   onRead,
   onClick
 }: {
-  notification: Notification
+  notification: NotificationType
   onRead: () => void
   onClick: () => void
 }) {
-  const config = NOTIFICATION_CONFIG[notification.type]
-  const timeAgo = formatDistanceToNow(new Date(notification.created_at), {
-    addSuffix: false,
-    locale: fr
-  })
+  const config = NOTIFICATION_CONFIG[notification.type as NotificationTypeKey] || DEFAULT_CONFIG
+
+  let timeAgo = ''
+  try {
+    timeAgo = formatDistanceToNow(new Date(notification.created_at), {
+      addSuffix: false,
+      locale: fr
+    })
+  } catch {
+    timeAgo = ''
+  }
 
   return (
     <button
@@ -133,19 +170,18 @@ function NotificationItem({
         </div>
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-medium ${config.color}`}>
-            {NOTIFICATION_LABELS[notification.type]}
+            {notification.title || config.label}
           </p>
-          <p className="text-sm text-foreground truncate">
-            {notification.dossier_reference && (
-              <span className="font-mono">{notification.dossier_reference}</span>
-            )}
-            {notification.participant_name && (
-              <span> - {notification.participant_name}</span>
-            )}
-          </p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {timeAgo}
-          </p>
+          {notification.message && (
+            <p className="text-sm text-foreground truncate">
+              {notification.message}
+            </p>
+          )}
+          {timeAgo && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {timeAgo}
+            </p>
+          )}
         </div>
         {!notification.is_read && (
           <div className="flex-shrink-0">
@@ -160,62 +196,41 @@ function NotificationItem({
 export function NotificationsBell() {
   const router = useRouter()
   const [open, setOpen] = useState(false)
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const [unreadCount, setUnreadCount] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [markingAllRead, setMarkingAllRead] = useState(false)
 
-  // Charger les notifications
-  const loadNotifications = async () => {
+  const {
+    notifications,
+    unreadCount,
+    isLoading,
+    markAsRead,
+    markAllRead,
+    markingAllRead,
+  } = useNotifications()
+
+  const handleMarkAsRead = async (notificationId: number) => {
     try {
-      const data = await getUserNotifications({ limit: 20 })
-      setNotifications(data.notifications)
-      setUnreadCount(data.unreadCount)
-    } catch (error) {
-      console.error('Error loading notifications:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadNotifications()
-
-    // Rafraîchir toutes les 30 secondes
-    const interval = setInterval(loadNotifications, 30000)
-    return () => clearInterval(interval)
-  }, [])
-
-  const handleMarkAsRead = async (notificationId: string) => {
-    try {
-      await markNotificationAsRead(notificationId)
-      setNotifications(prev =>
-        prev.map(n => n.id === notificationId ? { ...n, is_read: true } : n)
-      )
-      setUnreadCount(prev => Math.max(0, prev - 1))
+      await markAsRead(notificationId)
     } catch (error) {
       console.error('Error marking as read:', error)
     }
   }
 
   const handleMarkAllAsRead = async () => {
-    setMarkingAllRead(true)
     try {
-      await markAllNotificationsAsRead()
-      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
-      setUnreadCount(0)
+      await markAllRead(undefined as never)
       toast.success('Toutes les notifications marquées comme lues')
     } catch (error) {
       toast.error('Erreur lors du marquage')
-    } finally {
-      setMarkingAllRead(false)
     }
   }
 
-  const handleNotificationClick = (notification: Notification) => {
+  const handleNotificationClick = (notification: NotificationType) => {
     setOpen(false)
-    if (notification.dossier_id) {
-      router.push(`/admin/dossiers/${notification.dossier_id}`)
+    if (notification.link) {
+      router.push(notification.link)
+    } else if (notification.metadata_json?.trip_id) {
+      router.push(`/admin/circuits/${notification.metadata_json.trip_id}`)
+    } else if (notification.metadata_json?.booking_id) {
+      router.push('/admin/reservations')
     }
   }
 
@@ -246,14 +261,14 @@ export function NotificationsBell() {
               {markingAllRead ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-1" />
               ) : null}
-              Mark all as seen
+              Tout marquer comme lu
             </Button>
           )}
         </div>
 
         {/* Notifications list */}
         <ScrollArea className="h-[400px]">
-          {loading ? (
+          {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
@@ -265,7 +280,7 @@ export function NotificationsBell() {
           ) : (
             <div className="divide-y">
               {notifications.map((notification) => (
-                <NotificationItem
+                <NotificationItemRow
                   key={notification.id}
                   notification={notification}
                   onRead={() => handleMarkAsRead(notification.id)}

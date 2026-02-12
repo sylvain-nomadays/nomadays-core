@@ -54,10 +54,9 @@ const configCategories: ConfigCategory[] = [
   },
   {
     title: 'Taux de TVA',
-    description: 'Configurez les taux de TVA par pays',
+    description: 'Configurez les taux de TVA par pays et catégorie de service',
     href: '/admin/configuration/vat-rates',
     icon: DollarSign,
-    badge: 'À venir',
   },
   {
     title: 'Modèles de documents',

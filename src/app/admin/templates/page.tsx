@@ -24,11 +24,19 @@ import {
   Link2,
 } from 'lucide-react';
 import { LocationSelector } from '@/components/suppliers/LocationSelector';
-import { useLocations, useCreateLocation, useUpdateLocation, useDeleteLocation } from '@/hooks/useLocations';
+import { Camera, Upload, X, Sparkles } from 'lucide-react';
+import {
+  useLocations, useCreateLocation, useUpdateLocation, useDeleteLocation,
+  useLocationPhotos, useUploadLocationPhoto, useDeleteLocationPhoto, useReorderLocationPhotos,
+  useGenerateLocationPhotoAI,
+} from '@/hooks/useLocations';
 import { COUNTRIES, getCountryFlag, getCountryName } from '@/lib/constants/countries';
 import GooglePlacesAutocomplete, { type PlaceResult } from '@/components/common/GooglePlacesAutocomplete';
 import LocationMapPicker from '@/components/common/LocationMapPicker';
-import type { FormulaCategory, TransportMode, LocationLink, LocationType, CreateLocationDTO, UpdateLocationDTO, Location } from '@/lib/api/types';
+import type { FormulaCategory, TransportMode, LocationLink, LocationType, CreateLocationDTO, UpdateLocationDTO, Location, LocationPhoto } from '@/lib/api/types';
+import { DestinationSuggestModal } from '@/components/locations/DestinationSuggestModal';
+import { useFormulaTemplates, type FormulaTemplateListItem } from '@/hooks/useFormulaTemplates';
+import { useDayTemplates, type DayTemplateListItem } from '@/hooks/useDayTemplates';
 
 type TemplateTab = 'formulas' | 'days' | 'destinations' | 'links';
 
@@ -186,11 +194,44 @@ export default function TemplatesPage() {
   });
   const [destMenuOpen, setDestMenuOpen] = useState<number | null>(null);
 
+  // Formula templates from API
+  const {
+    templates: formulaTemplates,
+    isLoading: formulasLoading,
+    refetch: refetchFormulas,
+    remove: deleteFormulaTemplate,
+  } = useFormulaTemplates({
+    category: selectedCategory || undefined,
+    search: searchQuery && activeTab === 'formulas' ? searchQuery : undefined,
+  });
+
+  // Day templates from API
+  const {
+    dayTemplates,
+    isLoading: daysLoading,
+    refetch: refetchDays,
+    remove: deleteDayTemplate,
+  } = useDayTemplates({
+    search: searchQuery && activeTab === 'days' ? searchQuery : undefined,
+  });
+
   // Locations from API (for destinations tab and links)
   const { locations, isLoading: locationsLoading, refetch: refetchLocations } = useLocations({ is_active: true, page_size: 200 });
   const { mutate: createLocation, loading: creatingDest } = useCreateLocation();
   const { mutate: updateLocation, loading: updatingDest } = useUpdateLocation();
   const { mutate: deleteLocation, loading: deletingDest } = useDeleteLocation();
+
+  // Location photos
+  const { mutate: uploadLocationPhoto, loading: uploadingPhoto } = useUploadLocationPhoto();
+  const { mutate: deleteLocationPhoto } = useDeleteLocationPhoto();
+  const { mutate: generatePhotoAI, loading: generatingPhotoAI } = useGenerateLocationPhotoAI();
+  const {
+    data: editingDestPhotos,
+    refetch: refetchDestPhotos,
+  } = useLocationPhotos(editingDestination?.id ?? null);
+  const [showAIPrompt, setShowAIPrompt] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [showSuggestModal, setShowSuggestModal] = useState(false);
 
   // Destination handlers
   const openCreateDestination = useCallback(() => {
@@ -260,30 +301,54 @@ export default function TemplatesPage() {
     }
   };
 
-  // Filter templates
-  const filteredDayTemplates = useMemo(() => {
-    return mockDayTemplates.filter(template => {
-      const matchesSearch = !searchQuery ||
-        template.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        template.location?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        template.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
-      const matchesLocation = !selectedLocation || template.location_id === selectedLocation;
-      return matchesSearch && matchesLocation;
-    });
-  }, [searchQuery, selectedLocation]);
+  // Photo upload handler
+  const handlePhotoUpload = useCallback(async (files: FileList) => {
+    if (!editingDestination) return;
+    for (const file of Array.from(files)) {
+      try {
+        await uploadLocationPhoto({
+          locationId: editingDestination.id,
+          file,
+          options: { alt_text: editingDestination.name },
+        });
+      } catch (err) {
+        console.error('Failed to upload photo:', err);
+      }
+    }
+    refetchDestPhotos();
+  }, [editingDestination, uploadLocationPhoto, refetchDestPhotos]);
 
-  const filteredFormulaTemplates = useMemo(() => {
-    return mockFormulaTemplates.filter(template => {
-      const matchesSearch = !searchQuery ||
-        template.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        template.supplier?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        template.location?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        template.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
-      const matchesCategory = !selectedCategory || template.category === selectedCategory;
-      const matchesLocation = !selectedLocation || template.location_id === selectedLocation;
-      return matchesSearch && matchesCategory && matchesLocation;
-    });
-  }, [searchQuery, selectedCategory, selectedLocation]);
+  const handlePhotoDelete = useCallback(async (photoId: number) => {
+    if (!editingDestination) return;
+    try {
+      await deleteLocationPhoto({ locationId: editingDestination.id, photoId });
+      refetchDestPhotos();
+    } catch (err) {
+      console.error('Failed to delete photo:', err);
+    }
+  }, [editingDestination, deleteLocationPhoto, refetchDestPhotos]);
+
+  // AI photo generation handler
+  const handleGeneratePhotoAI = useCallback(async (customPrompt?: string) => {
+    if (!editingDestination) return;
+    try {
+      await generatePhotoAI({
+        locationId: editingDestination.id,
+        prompt: customPrompt || undefined,
+        quality: 'high',
+      });
+      refetchDestPhotos();
+      setShowAIPrompt(false);
+      setAiPrompt('');
+    } catch (err) {
+      console.error('Failed to generate AI photo:', err);
+      alert('Erreur lors de la génération IA. Vérifiez que le service Vertex AI est configuré.');
+    }
+  }, [editingDestination, generatePhotoAI, refetchDestPhotos]);
+
+  // Templates are already filtered by the API (search + category sent as query params)
+  const filteredDayTemplates = dayTemplates;
+  const filteredFormulaTemplates = formulaTemplates;
 
   const filteredLocations = useMemo(() => {
     if (!searchQuery) return locations;
@@ -302,14 +367,17 @@ export default function TemplatesPage() {
     );
   }, [locationLinks, searchQuery]);
 
-  // Stats by category
+  // Stats by category (from API data)
   const statsByCategory = useMemo(() => {
     const stats: Record<FormulaCategory, number> = {
       accommodation: 0, activity: 0, transport: 0, restaurant: 0, guide: 0, other: 0,
     };
-    mockFormulaTemplates.forEach(f => { stats[f.category]++; });
+    formulaTemplates.forEach(f => {
+      const cat = (f.template_category || f.block_type || 'other') as FormulaCategory;
+      if (cat in stats) stats[cat]++;
+    });
     return stats;
-  }, []);
+  }, [formulaTemplates]);
 
   // Handle new link creation
   const handleCreateLink = () => {
@@ -338,8 +406,8 @@ export default function TemplatesPage() {
 
   // Tab button labels
   const tabConfig: { key: TemplateTab; label: string; icon: React.ComponentType<{ className?: string }>; count: number }[] = [
-    { key: 'formulas', label: 'Formules types', icon: Package, count: mockFormulaTemplates.length },
-    { key: 'days', label: 'Journées types', icon: Calendar, count: mockDayTemplates.length },
+    { key: 'formulas', label: 'Formules types', icon: Package, count: formulaTemplates.length },
+    { key: 'days', label: 'Journées types', icon: Calendar, count: dayTemplates.length },
     { key: 'destinations', label: 'Destinations', icon: MapPin, count: locations.length },
     { key: 'links', label: 'Liaisons', icon: Link2, count: locationLinks.length },
   ];
@@ -363,13 +431,22 @@ export default function TemplatesPage() {
             Nouvelle liaison
           </button>
         ) : activeTab === 'destinations' ? (
-          <button
-            onClick={openCreateDestination}
-            className="inline-flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700"
-          >
-            <Plus className="w-5 h-5" />
-            Nouvelle destination
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSuggestModal(true)}
+              className="inline-flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700"
+            >
+              <Sparkles className="w-5 h-5" />
+              Suggérer par IA
+            </button>
+            <button
+              onClick={openCreateDestination}
+              className="inline-flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700"
+            >
+              <Plus className="w-5 h-5" />
+              Nouvelle destination
+            </button>
+          </div>
         ) : (
           <button
             onClick={() => {/* TODO */}}
@@ -411,7 +488,7 @@ export default function TemplatesPage() {
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
-            Toutes ({mockFormulaTemplates.length})
+            Toutes ({formulaTemplates.length})
           </button>
           {(Object.entries(categoryConfig) as [FormulaCategory, typeof categoryConfig[FormulaCategory]][]).map(([key, config]) => {
             const count = statsByCategory[key];
@@ -475,25 +552,29 @@ export default function TemplatesPage() {
               <tr className="bg-gray-50 border-b border-gray-100">
                 <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Formule</th>
                 <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Catégorie</th>
-                <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Location</th>
-                <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Fournisseur</th>
-                <th className="text-right px-4 py-3 text-sm font-medium text-gray-500">Coût</th>
+                <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">Pays</th>
+                <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">Items</th>
+                <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">Version</th>
                 <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredFormulaTemplates.map(template => {
-                const catConfig = categoryConfig[template.category];
+                const cat = (template.template_category || template.block_type || 'other') as FormulaCategory;
+                const catConfig = categoryConfig[cat] || categoryConfig.other;
                 const CatIcon = catConfig.icon;
+                const tags = template.template_tags || [];
                 return (
                   <tr key={template.id} className="hover:bg-gray-50">
                     <td className="px-4 py-4">
                       <div>
                         <div className="font-medium text-gray-900">{template.name}</div>
-                        <div className="text-sm text-gray-500 line-clamp-1">{template.description}</div>
-                        {template.tags.length > 0 && (
+                        {template.description_html && (
+                          <div className="text-sm text-gray-500 line-clamp-1">{template.description_html.replace(/<[^>]*>/g, '')}</div>
+                        )}
+                        {tags.length > 0 && (
                           <div className="flex gap-1 mt-1">
-                            {template.tags.slice(0, 2).map(tag => (
+                            {tags.slice(0, 2).map((tag: string) => (
                               <span key={tag} className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">{tag}</span>
                             ))}
                           </div>
@@ -507,32 +588,41 @@ export default function TemplatesPage() {
                       </span>
                     </td>
                     <td className="px-4 py-4">
-                      {template.location ? (
+                      {template.template_country_code ? (
                         <div className="flex items-center gap-1 text-gray-700">
                           <MapPin className="w-3.5 h-3.5 text-gray-400" />
-                          {template.location}
+                          {getCountryFlag(template.template_country_code)} {getCountryName(template.template_country_code)}
                         </div>
                       ) : (
                         <span className="text-gray-400 text-sm">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-4">
-                      {template.supplier ? (
-                        <span className="text-gray-700 text-sm">{template.supplier}</span>
-                      ) : (
-                        <span className="text-gray-400 italic text-sm">Non défini</span>
+                    <td className="px-4 py-4 text-center">
+                      <div className="text-sm text-gray-700">{template.items_count} item{template.items_count > 1 ? 's' : ''}</div>
+                      {template.usage_count > 0 && (
+                        <div className="text-xs text-gray-400">{template.usage_count} utilisation{template.usage_count > 1 ? 's' : ''}</div>
                       )}
                     </td>
-                    <td className="px-4 py-4 text-right">
-                      <span className="font-medium text-gray-900">{template.unit_cost} {template.currency}</span>
-                      <div className="text-xs text-gray-500">{template.items_count} item{template.items_count > 1 ? 's' : ''}</div>
+                    <td className="px-4 py-4 text-center">
+                      <span className="text-xs text-gray-400">v{template.template_version}</span>
                     </td>
                     <td className="px-4 py-4 text-center">
                       <div className="flex items-center justify-center gap-1">
                         <button className="p-1.5 hover:bg-gray-100 rounded-lg" title="Voir"><Eye className="w-4 h-4 text-gray-400" /></button>
                         <button className="p-1.5 hover:bg-gray-100 rounded-lg" title="Modifier"><Edit className="w-4 h-4 text-gray-400" /></button>
                         <button className="p-1.5 hover:bg-gray-100 rounded-lg" title="Dupliquer"><Copy className="w-4 h-4 text-gray-400" /></button>
-                        <button className="p-1.5 hover:bg-red-50 rounded-lg" title="Supprimer"><Trash2 className="w-4 h-4 text-red-400" /></button>
+                        <button
+                          className="p-1.5 hover:bg-red-50 rounded-lg"
+                          title="Supprimer"
+                          onClick={async () => {
+                            if (confirm('Supprimer ce template ?')) {
+                              await deleteFormulaTemplate(template.id);
+                              refetchFormulas();
+                            }
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4 text-red-400" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -557,55 +647,74 @@ export default function TemplatesPage() {
       {/* ================================================================ */}
       {activeTab === 'days' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredDayTemplates.map(template => (
-            <div key={template.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-shadow">
-              <div className="p-4">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-10 h-10 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
-                      <Calendar className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-gray-900">{template.name}</h3>
-                      <div className="flex items-center gap-1 text-sm text-gray-500">
-                        <MapPin className="w-3 h-3" />
-                        {template.location}
+          {filteredDayTemplates.map(template => {
+            const tags = template.template_tags || [];
+            return (
+              <div key={template.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-shadow">
+                <div className="p-4">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-10 h-10 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                        <Calendar className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold text-gray-900">{template.title || 'Sans titre'}</h3>
+                        {(template.location_from || template.location_to) && (
+                          <div className="flex items-center gap-1 text-sm text-gray-500">
+                            <MapPin className="w-3 h-3" />
+                            {template.location_from}{template.location_to ? ` → ${template.location_to}` : ''}
+                          </div>
+                        )}
                       </div>
                     </div>
+                    <div className="relative">
+                      <button onClick={() => setMenuOpen(menuOpen === template.id ? null : template.id)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                        <MoreVertical className="w-4 h-4 text-gray-400" />
+                      </button>
+                      {menuOpen === template.id && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(null)} />
+                          <div className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20 w-36">
+                            <button className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 w-full text-left"><Eye className="w-4 h-4" />Voir</button>
+                            <button className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 w-full text-left"><Edit className="w-4 h-4" />Modifier</button>
+                            <button
+                              className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 w-full text-left"
+                              onClick={async () => {
+                                setMenuOpen(null);
+                                if (confirm('Supprimer cette journée type ?')) {
+                                  await deleteDayTemplate(template.id);
+                                  refetchDays();
+                                }
+                              }}
+                            >
+                              <Trash2 className="w-4 h-4" />Supprimer
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="relative">
-                    <button onClick={() => setMenuOpen(menuOpen === template.id ? null : template.id)} className="p-1.5 hover:bg-gray-100 rounded-lg">
-                      <MoreVertical className="w-4 h-4 text-gray-400" />
-                    </button>
-                    {menuOpen === template.id && (
-                      <>
-                        <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(null)} />
-                        <div className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20 w-36">
-                          <button className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 w-full text-left"><Eye className="w-4 h-4" />Voir</button>
-                          <button className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 w-full text-left"><Edit className="w-4 h-4" />Modifier</button>
-                          <button className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 w-full text-left"><Copy className="w-4 h-4" />Dupliquer</button>
-                          <button className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 w-full text-left"><Trash2 className="w-4 h-4" />Supprimer</button>
-                        </div>
-                      </>
-                    )}
+                  {template.description && (
+                    <p className="text-sm text-gray-600 mb-3 line-clamp-2">{template.description}</p>
+                  )}
+                  <div className="flex items-center gap-3 text-sm text-gray-500 mb-3">
+                    <div className="flex items-center gap-1"><Package className="w-4 h-4" />{template.formulas_count} bloc{template.formulas_count > 1 ? 's' : ''}</div>
+                    <span className="text-xs text-gray-400">v{template.template_version}</span>
                   </div>
+                  {tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {tags.slice(0, 3).map((tag: string) => (
+                        <span key={tag} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">{tag}</span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <p className="text-sm text-gray-600 mb-3 line-clamp-2">{template.description}</p>
-                <div className="flex items-center gap-3 text-sm text-gray-500 mb-3">
-                  <div className="flex items-center gap-1"><Clock className="w-4 h-4" />{template.duration_hours}h</div>
-                  <div className="flex items-center gap-1"><Package className="w-4 h-4" />{template.formulas_count} formules</div>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {template.tags.slice(0, 3).map(tag => (
-                    <span key={tag} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">{tag}</span>
-                  ))}
+                <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-end">
+                  <button className="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Utiliser →</button>
                 </div>
               </div>
-              <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-end">
-                <button className="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Utiliser →</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {filteredDayTemplates.length === 0 && (
             <div className="col-span-3 text-center py-12">
               <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-4" />
@@ -638,8 +747,21 @@ export default function TemplatesPage() {
                 return (
                   <tr key={location.id} className="hover:bg-gray-50">
                     <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <MapPin className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <div className="flex items-center gap-2.5">
+                        {/* Photo thumbnail or icon */}
+                        {location.photos && location.photos.length > 0 ? (
+                          <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-gray-100">
+                            <img
+                              src={location.photos![0]!.thumbnail_url || location.photos![0]!.url}
+                              alt={location.name}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center flex-shrink-0">
+                            <MapPin className="w-4 h-4 text-gray-300" />
+                          </div>
+                        )}
                         <div>
                           <div className="font-medium text-gray-900">{location.name}</div>
                           {location.slug && <div className="text-xs text-gray-400">{location.slug}</div>}
@@ -868,6 +990,126 @@ export default function TemplatesPage() {
                 />
               </div>
 
+              {/* Photos (only when editing, not creating) */}
+              {editingDestination && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <Camera className="w-4 h-4 inline mr-1.5 text-gray-400" />
+                    Photos ({editingDestPhotos?.length || 0})
+                  </label>
+                  <p className="text-xs text-gray-400 mb-3">
+                    Les photos sont utilisées pour illustrer les jours du circuit associés à cette destination (1re photo = 1er jour, 2e photo = 2e jour, etc.)
+                  </p>
+
+                  {/* Photo gallery */}
+                  {(editingDestPhotos?.length ?? 0) > 0 && (
+                    <div className="grid grid-cols-4 gap-2 mb-3">
+                      {editingDestPhotos?.map((photo, index) => (
+                        <div key={photo.id} className="relative group rounded-lg overflow-hidden aspect-[4/3] bg-gray-100">
+                          <img
+                            src={photo.thumbnail_url || photo.url}
+                            alt={photo.alt_text || editingDestination.name}
+                            className="w-full h-full object-cover"
+                          />
+                          {/* Sort order badge */}
+                          <span className="absolute top-1 left-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded font-medium">
+                            {index + 1}
+                          </span>
+                          {/* Delete button */}
+                          <button
+                            type="button"
+                            onClick={() => handlePhotoDelete(photo.id)}
+                            className="absolute top-1 right-1 p-1 bg-red-500/80 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Upload dropzone + AI Generate side by side */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Upload dropzone */}
+                    <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-emerald-400 hover:bg-emerald-50/30 transition-colors">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files?.length) {
+                            handlePhotoUpload(e.target.files);
+                            e.target.value = '';
+                          }
+                        }}
+                      />
+                      {uploadingPhoto ? (
+                        <span className="text-sm text-gray-500">Upload en cours...</span>
+                      ) : (
+                        <>
+                          <Upload className="w-5 h-5 text-gray-400 mb-1" />
+                          <span className="text-xs text-gray-500">Uploader une photo</span>
+                        </>
+                      )}
+                    </label>
+
+                    {/* AI Generate button */}
+                    <button
+                      type="button"
+                      onClick={() => setShowAIPrompt(!showAIPrompt)}
+                      disabled={generatingPhotoAI}
+                      className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-purple-200 rounded-lg cursor-pointer hover:border-purple-400 hover:bg-purple-50/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {generatingPhotoAI ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin mb-1" />
+                          <span className="text-xs text-purple-500">Génération IA...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-5 h-5 text-purple-400 mb-1" />
+                          <span className="text-xs text-purple-500">Générer par IA</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* AI Prompt panel (expandable) */}
+                  {showAIPrompt && (
+                    <div className="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+                      <p className="text-xs text-purple-600 mb-2 font-medium">
+                        Prompt (optionnel — laissez vide pour auto-générer à partir du nom et pays)
+                      </p>
+                      <textarea
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        placeholder={`Ex: Beautiful temple at sunset in ${editingDestination?.name || 'Chiang Mai'}, golden hour lighting, travel photography...`}
+                        className="w-full h-16 text-xs border border-purple-200 rounded-md px-2 py-1.5 resize-none focus:ring-1 focus:ring-purple-400 focus:border-purple-400"
+                      />
+                      <div className="flex items-center justify-between mt-2">
+                        <button
+                          type="button"
+                          onClick={() => { setShowAIPrompt(false); setAiPrompt(''); }}
+                          className="text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          Annuler
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGeneratePhotoAI(aiPrompt || undefined)}
+                          disabled={generatingPhotoAI}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 rounded-md hover:bg-purple-700 disabled:opacity-50"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          {generatingPhotoAI ? 'Génération...' : 'Générer'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Actions */}
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
                 <button
@@ -1072,6 +1314,14 @@ export default function TemplatesPage() {
           )}
         </div>
       )}
+
+      {/* Modal suggestion IA de destinations */}
+      <DestinationSuggestModal
+        isOpen={showSuggestModal}
+        onClose={() => setShowSuggestModal(false)}
+        onSuccess={() => refetchLocations()}
+        defaultCountryCode="TH"
+      />
     </div>
   );
 }

@@ -8,23 +8,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { useTravelThemes } from '@/hooks/useTravelThemes';
-
-// Map icon names from backend to simple emoji fallbacks
-// (Phosphor icons will be used later — for now, clean visual)
-const THEME_ICONS: Record<string, string> = {
-  Bank: '🏛',
-  Tree: '🌿',
-  Mountains: '🏔',
-  Island: '🏝',
-  UsersThree: '👨‍👩‍👧',
-  Sparkle: '✨',
-  Wine: '🍷',
-  Compass: '🧭',
-  Jeep: '🚗',
-  Boat: '⛵',
-  Flower: '🧘',
-  Confetti: '🎊',
-};
+import { ThemeIcon } from '@/components/ui/theme-icon';
 
 export default function ThemesConfigPage() {
   const { themes, isLoading } = useTravelThemes();
@@ -82,15 +66,8 @@ export default function ThemesConfigPage() {
                 {index + 1}
               </span>
 
-              {/* Icon with color background */}
-              <div
-                className="w-10 h-10 rounded-lg flex items-center justify-center text-lg flex-shrink-0"
-                style={{
-                  backgroundColor: theme.color ? `${theme.color}15` : '#f3f4f6',
-                }}
-              >
-                {THEME_ICONS[theme.icon || ''] || '📍'}
-              </div>
+              {/* Phosphor Duotone icon with Nomadays color background */}
+              <ThemeIcon code={theme.code} size={22} bgSize="w-10 h-10" />
 
               {/* Label + description */}
               <div className="flex-1 min-w-0">

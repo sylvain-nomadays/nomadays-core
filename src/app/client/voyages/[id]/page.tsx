@@ -82,7 +82,7 @@ export default async function ClientVoyageDetailPage({
       advisor:users!dossiers_advisor_id_fkey(id, first_name, last_name, email),
       participants:dossier_participants(
         is_lead,
-        participant:participants(id, first_name, last_name, email, phone)
+        participant:participants!dossier_participants_participant_id_fkey(id, first_name, last_name, email, phone)
       )
     `)
     .eq('id', id)

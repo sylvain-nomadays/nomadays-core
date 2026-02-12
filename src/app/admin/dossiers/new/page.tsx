@@ -30,7 +30,7 @@ interface Advisor {
 
 export default function NewDossierPage() {
   const router = useRouter()
-  const { role, isNomadays } = useUserRole()
+  const { role, tenantId, isNomadays } = useUserRole()
   const [loading, setLoading] = useState(false)
   const [advisors, setAdvisors] = useState<Advisor[]>([])
 
@@ -68,26 +68,37 @@ export default function NewDossierPage() {
 
     setLoading(true)
     try {
-      // Create dossier with client name as title
-      const dossier = await createDossier({
-        title: `${firstName} ${lastName}`,
-        tenant_id: '00000000-0000-0000-0000-000000000001', // Nomadays HQ
+      // Build dossier payload — field names must match REAL Supabase table columns
+      // Real columns: tenant_id, status, client_name, client_email, client_phone,
+      // client_company, client_address, departure_date_from/to, budget_min/max,
+      // budget_currency, pax_adults/children/infants, destination_countries,
+      // marketing_source, marketing_campaign, internal_notes, is_hot, priority,
+      // assigned_to_id, partner_agency_id
+      // Generate a unique reference: ND-YYYY-XXXXXX
+      const year = new Date().getFullYear()
+      const seq = String(Date.now()).slice(-6)
+      const reference = `ND-${year}-${seq}`
+
+      const dossierPayload: Record<string, unknown> = {
+        reference,
+        tenant_id: tenantId || '00000000-0000-0000-0000-000000000001',
         status: 'lead',
-        origin: origin,
-        trip_type: 'fit',
-        language: language,
-        marketing_source: marketingSource,
-        affiliate_name: marketingSource === 'affiliate' ? affiliateName : null,
-        advisor_id: advisorId || null,
-        client_notes: notes || null,
+        client_name: `${firstName} ${lastName}`.trim(),
+        client_email: email.trim() || null,
+        client_phone: phone.trim() || null,
+        marketing_source: marketingSource || null,
         destination_countries: [],
         pax_adults: 2,
         pax_children: 0,
         pax_infants: 0,
-      })
+      }
 
-      // TODO: Create participant and link to dossier
-      // For now, we'll just redirect
+      // Optional fields — only include if set
+      if (advisorId) dossierPayload.assigned_to_id = advisorId
+      if (notes.trim()) dossierPayload.internal_notes = notes.trim()
+
+      const dossier = await createDossier(dossierPayload)
+      // Note: createDossier auto-creates the lead participant internally
 
       toast.success('Dossier créé avec succès')
       router.push(`/admin/dossiers/${dossier.id}`)

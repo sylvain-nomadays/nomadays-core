@@ -76,6 +76,7 @@ type FormData = {
   // Autres
   tax_id: string;
   is_vat_registered: boolean;  // Assujetti TVA = TVA récupérable
+  requires_pre_booking: boolean;  // Réservation obligatoire avant confirmation
   default_currency: string;
 };
 
@@ -107,6 +108,7 @@ export default function SupplierEditor({
     billing_entity_note: '',
     tax_id: '',
     is_vat_registered: false,
+    requires_pre_booking: false,
     default_currency: 'EUR',
   });
 
@@ -131,6 +133,7 @@ export default function SupplierEditor({
         billing_entity_note: supplier.billing_entity_note || '',
         tax_id: supplier.tax_id || '',
         is_vat_registered: supplier.is_vat_registered || false,
+        requires_pre_booking: supplier.requires_pre_booking || false,
         default_currency: supplier.default_currency || 'EUR',
       });
     }
@@ -204,6 +207,7 @@ export default function SupplierEditor({
       billing_entity_note: formData.billing_entity_note || undefined,
       tax_id: formData.tax_id || undefined,
       is_vat_registered: formData.is_vat_registered,
+      requires_pre_booking: formData.requires_pre_booking,
       default_currency: formData.default_currency || undefined,
     };
 
@@ -446,6 +450,25 @@ export default function SupplierEditor({
                 />
               </div>
             </div>
+          </div>
+
+          {/* Pré-réservation obligatoire */}
+          <div className="p-4 bg-[#E6F9FA] border border-[#CCF3F5] rounded-lg">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.requires_pre_booking}
+                onChange={(e) => handleChange('requires_pre_booking', e.target.checked)}
+                className="mt-1 w-4 h-4 text-[#0FB6BC] border-gray-300 rounded focus:ring-[#0FB6BC]"
+              />
+              <div>
+                <span className="font-medium text-gray-900">Pré-réservation obligatoire</span>
+                <p className="text-sm text-gray-600 mt-0.5">
+                  Si coché, ce fournisseur devra être réservé avant la confirmation du voyage.
+                  Les services concernés apparaîtront automatiquement dans les demandes de pré-réservation.
+                </p>
+              </div>
+            </label>
           </div>
 
           {/* Entité de facturation (pour la logistique) */}
