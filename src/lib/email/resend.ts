@@ -2,7 +2,14 @@
 
 import { Resend } from 'resend'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+// Lazy init — avoid crashing at build time when RESEND_API_KEY is not set
+let _resend: Resend | null = null
+function getResend(): Resend {
+  if (!_resend) {
+    _resend = new Resend(process.env.RESEND_API_KEY)
+  }
+  return _resend
+}
 
 // Adresse email utilisée pour envoyer (doit être vérifiée dans Resend)
 const FROM_EMAIL = process.env.EMAIL_FROM || 'noreply@nomadays.com'
@@ -37,7 +44,7 @@ export async function sendEmail(params: SendEmailParams): Promise<SendEmailResul
       ? `thread-${params.threadId}@${REPLY_TO_DOMAIN}`
       : params.replyTo || FROM_EMAIL
 
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await getResend().emails.send({
       from: `Nomadays <${FROM_EMAIL}>`,
       to: params.toName ? `${params.toName} <${params.to}>` : params.to,
       subject: params.subject,
