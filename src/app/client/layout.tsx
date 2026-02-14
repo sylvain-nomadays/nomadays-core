@@ -1,29 +1,32 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import Link from 'next/link'
-import { Logo } from '@/components/logo'
-import {
-  Home,
-  FolderHeart,
-  Heart,
-  User,
-  Settings,
-  HelpCircle,
-  LogOut,
-  MessageSquare,
-} from 'lucide-react'
+import { SiteHeader } from '@/components/client/website-layout/site-header'
+import { RightSidebar } from '@/components/client/website-layout/right-sidebar'
+import type { SidebarContent, ProposalMiniCard } from '@/components/client/website-layout/right-sidebar'
+import { getContinentTheme, getContinentCssVars } from '@/components/client/continent-theme'
+import { resolveSnippetValues } from '@/lib/cms/resolve-snippets'
 
-const navItems = [
-  { href: '/client', label: 'Accueil', icon: Home },
-  { href: '/client/voyages', label: 'Mes Voyages', icon: FolderHeart },
-  { href: '/client/wishlist', label: 'Liste d\'envies', icon: Heart },
-  { href: '/client/messages', label: 'Messages', icon: MessageSquare },
-]
+// ─── Country helpers ──────────────────────────────────────────────────────────
 
-const bottomNavItems = [
-  { href: '/client/profil', label: 'Mon Profil', icon: User },
-  { href: '/client/aide', label: 'Aide', icon: HelpCircle },
-]
+function countryFlag(code: string): string {
+  try {
+    return code
+      .toUpperCase()
+      .split('')
+      .map((c) => String.fromCodePoint(0x1f1e6 - 65 + c.charCodeAt(0)))
+      .join('')
+  } catch {
+    return ''
+  }
+}
+
+function countryNameFromCode(code: string): string {
+  try {
+    return new Intl.DisplayNames(['fr'], { type: 'region' }).of(code.toUpperCase()) || code
+  } catch {
+    return code
+  }
+}
 
 export default async function ClientLayout({
   children,
@@ -39,7 +42,7 @@ export default async function ClientLayout({
     redirect('/login')
   }
 
-  // Récupérer les infos du participant
+  // Recuperer les infos du participant
   const { data: participantData } = user.email
     ? await supabase
         .from('participants')
@@ -57,74 +60,191 @@ export default async function ClientLayout({
 
   const displayName = participant
     ? `${participant.first_name} ${participant.last_name}`
-    : user.email
+    : user.email || ''
+
+  // Fetch le dossier actif pour le theming continent
+  let activeDossierCountry: string | null = null
+  let activeDossierId: string | null = null
+  let allDossierIds: string[] = []
+
+  if (participant) {
+    // Strategy 1: Try via dossier_participants join
+    const { data: dpData } = await supabase
+      .from('dossier_participants')
+      .select('dossier_id')
+      .eq('participant_id', participant.id)
+      .order('created_at', { ascending: false })
+      .limit(5) as { data: any[] | null }
+
+    const dossierIds = (dpData || []).map((dp: any) => dp.dossier_id).filter(Boolean)
+
+    // Strategy 2: Also find dossiers by client_email
+    const { data: emailDossiers } = await (supabase
+      .from('dossiers') as any)
+      .select('id')
+      .eq('client_email', participant.email)
+      .not('status', 'eq', 'lost')
+      .order('created_at', { ascending: false })
+      .limit(5) as { data: any[] | null }
+
+    const emailDossierIds = (emailDossiers || []).map((d: any) => d.id)
+    const allIds = [...new Set([...dossierIds, ...emailDossierIds])]
+    allDossierIds = allIds
+
+    if (allIds.length > 0) {
+      const { data: dossierData } = await (supabase
+        .from('dossiers') as any)
+        .select('id, status, destination_countries, departure_date_from')
+        .in('id', allIds) as { data: any[] | null }
+
+      const dossiers = (dossierData || [])
+        .filter((d: any) => d.status !== 'lost')
+        .map((d: any) => ({
+          ...d,
+          destination_country: d.destination_countries?.[0] || null,
+          travel_date_start: d.departure_date_from || null,
+        }))
+
+      const now = new Date()
+      const best = dossiers.find((d: any) =>
+        d.travel_date_start && new Date(d.travel_date_start) > now
+      ) ?? dossiers[0] ?? null
+
+      if (best) {
+        activeDossierCountry = best.destination_country
+        activeDossierId = best.id
+      }
+    }
+  }
+
+  const continentTheme = getContinentTheme(activeDossierCountry)
+
+  // ── Fetch proposals (trips) for sidebar mini-cards ──
+  let sidebarProposals: ProposalMiniCard[] = []
+
+  if (allDossierIds.length > 0) {
+    try {
+      // Fetch trips linked to user's dossiers (non-cancelled, limit to recent)
+      const { data: tripsData } = await (supabase
+        .from('trips') as any)
+        .select('id, name, dossier_id, status, duration_days, destination_country, default_currency, created_at')
+        .in('dossier_id', allDossierIds)
+        .neq('status', 'cancelled')
+        .order('created_at', { ascending: false })
+        .limit(6) as { data: any[] | null }
+
+      if (tripsData && tripsData.length > 0) {
+        // Enrich each trip with hero photo + pricing (in parallel)
+        const enriched = await Promise.all(
+          tripsData.map(async (trip: any) => {
+            // Fetch hero photo
+            const { data: photos } = await (supabase
+              .from('trip_photos') as any)
+              .select('url_medium, url_hero, url_large, is_hero')
+              .eq('trip_id', trip.id)
+              .order('sort_order', { ascending: true })
+              .limit(3) as { data: any[] | null }
+
+            const heroPhoto = photos?.find((p: any) => p.is_hero) ?? photos?.[0] ?? null
+            const heroPhotoUrl = heroPhoto?.url_hero ?? heroPhoto?.url_large ?? heroPhoto?.url_medium ?? null
+
+            // Fetch primary pricing
+            const { data: paxConfigs } = await (supabase
+              .from('trip_pax_configs') as any)
+              .select('price_per_person, is_primary')
+              .eq('trip_id', trip.id)
+              .order('sort_order', { ascending: true })
+              .limit(3) as { data: any[] | null }
+
+            const basePricing = paxConfigs?.find((p: any) => p.is_primary !== false) ?? paxConfigs?.[0] ?? null
+
+            const destCode = trip.destination_country || null
+            const tripTheme = getContinentTheme(destCode)
+
+            return {
+              dossierId: trip.dossier_id,
+              tripName: trip.name || 'Circuit sur mesure',
+              countryName: destCode ? countryNameFromCode(destCode) : 'Destination',
+              countryFlag: destCode ? countryFlag(destCode) : '\uD83C\uDF0D',
+              heroPhotoUrl,
+              durationDays: trip.duration_days || null,
+              pricePerPerson: basePricing?.price_per_person || null,
+              currency: trip.default_currency || 'EUR',
+              continentTheme: tripTheme,
+            } satisfies ProposalMiniCard
+          })
+        )
+
+        sidebarProposals = enriched
+      }
+    } catch (err) {
+      // Don't break the layout if proposals fail to load
+      console.warn('[ClientLayout] Error fetching sidebar proposals:', err)
+    }
+  }
+
+  // Fetch sidebar CMS snippets
+  let sidebarContent: SidebarContent | undefined
+  try {
+    const sidebarKeys = [
+      'sidebar.collectif.title', 'sidebar.collectif.tagline', 'sidebar.collectif.description',
+      'sidebar.collectif.phone', 'sidebar.collectif.whatsapp', 'sidebar.collectif.email',
+      'sidebar.insurance.title', 'sidebar.insurance.subtitle', 'sidebar.insurance.description',
+      'sidebar.insurance.cta_text', 'sidebar.insurance.cta_link',
+      'sidebar.ambassador.title', 'sidebar.ambassador.description', 'sidebar.ambassador.cta_text',
+      'sidebar.social.instagram', 'sidebar.social.facebook', 'sidebar.social.youtube',
+    ]
+    const sv = await resolveSnippetValues(sidebarKeys, 'fr')
+
+    // Only build sidebarContent if we got some values
+    if (Object.keys(sv).length > 0) {
+      sidebarContent = {
+        collectif: {
+          title: sv['sidebar.collectif.title'] || 'Le collectif Nomadays',
+          tagline: sv['sidebar.collectif.tagline'] || 'Vos agences locales s\'unissent et inventent',
+          description: sv['sidebar.collectif.description'] || '',
+          phone: sv['sidebar.collectif.phone'] || '',
+          whatsapp: sv['sidebar.collectif.whatsapp'] || '',
+          email: sv['sidebar.collectif.email'] || '',
+        },
+        insurance: {
+          title: sv['sidebar.insurance.title'] || 'Assurance Chapka',
+          subtitle: sv['sidebar.insurance.subtitle'] || 'Notre partenaire',
+          description: sv['sidebar.insurance.description'] || '',
+          cta_text: sv['sidebar.insurance.cta_text'] || 'D\u00e9couvrir les garanties',
+          cta_link: sv['sidebar.insurance.cta_link'] || '#',
+        },
+        ambassador: {
+          title: sv['sidebar.ambassador.title'] || 'Passeurs d\'Horizons',
+          description: sv['sidebar.ambassador.description'] || '',
+          cta_text: sv['sidebar.ambassador.cta_text'] || 'Passer le relais',
+        },
+        social: {
+          instagram: sv['sidebar.social.instagram'] || '#',
+          facebook: sv['sidebar.social.facebook'] || '#',
+          youtube: sv['sidebar.social.youtube'] || '#',
+        },
+      }
+    }
+  } catch (err) {
+    console.error('[ClientLayout] Error fetching sidebar snippets:', err)
+    // sidebarContent stays undefined -> RightSidebar will use defaults
+  }
 
   return (
-    <div className="flex h-screen bg-background">
-      {/* Sidebar */}
-      <aside className="w-64 border-r bg-sidebar flex flex-col">
-        {/* Logo */}
-        <div className="p-4 border-b">
-          <Link href="/client">
-            <Logo className="h-7" />
-          </Link>
-        </div>
+    <div style={getContinentCssVars(continentTheme)} className="min-h-screen bg-[#F8F9FA]">
+      {/* Header horizontal */}
+      <SiteHeader
+        displayName={displayName}
+        continentTheme={continentTheme}
+        salonDeTheHref={activeDossierId ? `/client/voyages/${activeDossierId}?tab=messages` : '/client'}
+        mesVoyagesHref={activeDossierId ? `/client/voyages/${activeDossierId}` : '/client/voyages'}
+      />
 
-        {/* Main navigation */}
-        <nav className="flex-1 p-3 space-y-1">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-
-        {/* Bottom navigation */}
-        <div className="p-3 space-y-1 border-t">
-          {bottomNavItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </Link>
-          ))}
-        </div>
-
-        {/* User section */}
-        <div className="p-3 border-t bg-sidebar-accent/50">
-          <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium text-primary">
-              {displayName?.[0]?.toUpperCase() ?? '?'}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{displayName}</p>
-              <p className="text-xs text-muted-foreground">Voyageur</p>
-            </div>
-          </div>
-          <form action="/auth/signout" method="post" className="mt-3">
-            <button
-              type="submit"
-              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full px-2 py-1.5 rounded hover:bg-sidebar-accent"
-            >
-              <LogOut className="h-4 w-4" />
-              Déconnexion
-            </button>
-          </form>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Page content */}
-        <main className="flex-1 overflow-auto bg-background">{children}</main>
+      {/* Main layout: content + right sidebar */}
+      <div className="voyageur-main-layout">
+        <main className="min-h-0">{children}</main>
+        <RightSidebar continentTheme={continentTheme} content={sidebarContent} proposals={sidebarProposals} />
       </div>
     </div>
   )

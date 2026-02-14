@@ -1,0 +1,168 @@
+/* ─── Mapbox Globe Map — Custom Marker Styles ───────────────────────────── */
+
+/* Import mapbox-gl CSS */
+@import 'mapbox-gl/dist/mapbox-gl.css';
+
+/* ─── Base marker ───────────────────────────────────────────────────────── */
+
+.map-marker {
+  cursor: pointer;
+  transition: transform 0.2s ease, z-index 0s;
+  will-change: transform;
+}
+
+.map-marker:hover {
+  transform: scale(1.15);
+  z-index: 10 !important;
+}
+
+.map-marker--highlighted {
+  transform: scale(1.2);
+  z-index: 10 !important;
+}
+
+/* ─── Marker circle ─────────────────────────────────────────────────────── */
+
+.map-marker__circle {
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #f5f5f5;
+  background-size: cover;
+  background-position: center;
+  position: relative;
+}
+
+/* Visited — sage green */
+.map-marker--visited .map-marker__circle {
+  width: 48px;
+  height: 48px;
+  border: 3px solid #8BA080;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Nomadays — turquoise with glow */
+.map-marker--nomadays .map-marker__circle {
+  width: 48px;
+  height: 48px;
+  border: 3px solid #0FB6BC;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: glowPulse 2.5s ease-in-out infinite;
+}
+
+/* Wishlist — terracotta dashed */
+.map-marker--wishlist .map-marker__circle {
+  width: 40px;
+  height: 40px;
+  border: 2px dashed #DD9371;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  animation: gentleFloat 3s ease-in-out infinite;
+  background-color: #fff9f6;
+}
+
+/* ─── Marker badge ──────────────────────────────────────────────────────── */
+
+.map-marker__badge {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.map-marker--visited .map-marker__badge {
+  background-color: #8BA080;
+}
+
+.map-marker--nomadays .map-marker__badge {
+  background-color: #0FB6BC;
+}
+
+/* ─── Marker fallback text ──────────────────────────────────────────────── */
+
+.map-marker__fallback {
+  font-size: 10px;
+  font-weight: 700;
+  color: #636E72;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.map-marker--wishlist .map-marker__fallback {
+  color: #DD9371;
+}
+
+/* ─── Animations ────────────────────────────────────────────────────────── */
+
+@keyframes glowPulse {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px rgba(15, 182, 188, 0.35),
+                0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 18px 6px rgba(15, 182, 188, 0.6),
+                0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+}
+
+@keyframes gentleFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+/* ─── Accessibility — Reduced motion ────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .map-marker--nomadays .map-marker__circle {
+    animation: none;
+    box-shadow: 0 0 12px 3px rgba(15, 182, 188, 0.5),
+                0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .map-marker--wishlist .map-marker__circle {
+    animation: none;
+  }
+}
+
+/* ─── Responsive — smaller markers on mobile ────────────────────────────── */
+
+@media (max-width: 767px) {
+  .map-marker--visited .map-marker__circle,
+  .map-marker--nomadays .map-marker__circle {
+    width: 36px;
+    height: 36px;
+    border-width: 2px;
+  }
+
+  .map-marker--wishlist .map-marker__circle {
+    width: 32px;
+    height: 32px;
+  }
+
+  .map-marker__badge {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* ─── Mapbox overrides ──────────────────────────────────────────────────── */
+
+.mapboxgl-ctrl-attrib {
+  display: none !important;
+}
+
+.mapboxgl-ctrl-logo {
+  opacity: 0.5;
+}

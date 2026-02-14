@@ -142,3 +142,63 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Espace Voyageur — Website layout */
+.voyageur-main-layout {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  min-height: calc(100vh - 66px);
+}
+
+@media (max-width: 1280px) {
+  .voyageur-main-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Layout destination (sidebar gauche + contenu) */
+.destination-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  max-width: 1400px;
+  margin: 0 auto;
+  min-height: 60vh;
+}
+
+@media (max-width: 1100px) {
+  .destination-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Print styles for program export */
+@media print {
+  aside,
+  .fixed,
+  button,
+  [role="tablist"] {
+    display: none !important;
+  }
+  .flex.h-screen {
+    display: block !important;
+    height: auto !important;
+  }
+  main {
+    padding: 0 !important;
+    overflow: visible !important;
+    max-height: none !important;
+  }
+  .rounded-2xl,
+  .rounded-xl {
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+  img {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

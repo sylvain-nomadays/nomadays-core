@@ -1,0 +1,90 @@
+/* ─── Mapbox base ─────────────────────────────────────────────────── */
+@import 'mapbox-gl/dist/mapbox-gl.css';
+
+/* ─── Explorer marker ────────────────────────────────────────────── */
+
+.explorer-marker {
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  z-index: 1;
+}
+
+.explorer-marker:hover,
+.explorer-marker:focus-visible {
+  transform: scale(1.15);
+  z-index: 10;
+}
+
+.explorer-marker--selected {
+  transform: scale(1.25);
+  z-index: 20;
+}
+
+.explorer-marker--hidden {
+  display: none;
+}
+
+.explorer-marker__circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2.5px solid white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.explorer-marker:hover .explorer-marker__circle,
+.explorer-marker--selected .explorer-marker__circle {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border-color: #D4A847;
+}
+
+.explorer-marker__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  user-select: none;
+}
+
+/* ─── Map legend ─────────────────────────────────────────────────── */
+
+.explorer-legend {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  gap: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: #636E72;
+  z-index: 5;
+}
+
+.explorer-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.explorer-legend__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .explorer-marker,
+  .explorer-marker__circle {
+    transition: none;
+  }
+}

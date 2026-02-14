@@ -1,25 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  ArrowRight,
-  Calendar,
-  MapPin,
-  Users,
-  Building2,
-} from 'lucide-react'
-
-const statusLabels: Record<string, { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' }> = {
-  lead: { label: 'Nouvelle demande', variant: 'secondary' },
-  qualified: { label: 'En cours', variant: 'default' },
-  proposal_sent: { label: 'Devis envoyé', variant: 'outline' },
-  negotiation: { label: 'En négociation', variant: 'outline' },
-  won: { label: 'Confirmé', variant: 'default' },
-  lost: { label: 'Annulé', variant: 'destructive' },
-}
+import { HeartStraight } from '@phosphor-icons/react/dist/ssr'
+import { DestinationCard } from '@/components/client/dashboard/destination-card'
 
 export default async function ClientVoyagesPage() {
   const supabase = await createClient()
@@ -42,130 +25,143 @@ export default async function ClientVoyagesPage() {
 
   if (!participant) {
     return (
-      <div className="p-6">
-        <Card>
-          <CardContent className="py-12 text-center">
-            <p className="text-muted-foreground">
-              Aucun voyage n'est associé à votre compte.
-            </p>
-          </CardContent>
-        </Card>
+      <div className="p-8 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md">
+          <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+            <HeartStraight size={32} weight="duotone" className="text-gray-300" />
+          </div>
+          <p className="text-sm text-gray-500">
+            Aucun voyage n&apos;est associé à votre compte.
+          </p>
+        </div>
       </div>
     )
   }
 
-  // Récupérer tous les dossiers du participant
-  const { data: dossierParticipants } = await supabase
+  // Récupérer tous les dossiers du participant (dual strategy: dossier_participants + client_email)
+  const { data: dpData } = await supabase
     .from('dossier_participants')
-    .select(`
-      is_lead,
-      dossier:dossiers(
-        id,
-        reference,
-        title,
-        status,
-        travel_date_start,
-        travel_date_end,
-        destination_country,
-        adults_count,
-        children_count,
-        created_at,
-        tenant:tenants(name, logo_url)
-      )
-    `)
+    .select('dossier_id')
     .eq('participant_id', participant.id)
     .order('created_at', { ascending: false })
+    .limit(20) as { data: any[] | null }
 
-  const allDossiers = (dossierParticipants || [])
-    .map((dp: any) => dp.dossier)
-    .filter(Boolean)
+  const dpIds = (dpData || []).map((dp: any) => dp.dossier_id).filter(Boolean)
+
+  const { data: emailDossiers } = await (supabase
+    .from('dossiers') as any)
+    .select('id')
+    .eq('client_email', user.email)
+    .order('created_at', { ascending: false })
+    .limit(20) as { data: any[] | null }
+
+  const emailIds = (emailDossiers || []).map((d: any) => d.id).filter(Boolean)
+  const allDossierIds = [...new Set([...dpIds, ...emailIds])]
+
+  let allDossiers: any[] = []
+  if (allDossierIds.length > 0) {
+    const { data: dossierData } = await (supabase
+      .from('dossiers') as any)
+      .select('*')
+      .in('id', allDossierIds)
+      .order('created_at', { ascending: false }) as { data: any[] | null }
+
+    allDossiers = (dossierData || []).map((d: any) => ({
+      ...d,
+      destination_country: d.destination_countries?.[0] || null,
+      travel_date_start: d.departure_date_from || null,
+      travel_date_end: d.departure_date_to || null,
+      adults_count: d.pax_adults || d.adults_count || 0,
+      children_count: d.pax_children || d.children_count || 0,
+    }))
+  }
+
+  // Fetch tenant info
+  const tenantIds = [...new Set(allDossiers.map((d: any) => d.tenant_id).filter(Boolean))]
+  let tenantMap: Record<string, any> = {}
+  if (tenantIds.length > 0) {
+    const { data: tenants } = await supabase
+      .from('tenants')
+      .select('id, name, logo_url')
+      .in('id', tenantIds)
+    for (const t of ((tenants || []) as any[])) {
+      tenantMap[t.id] = t
+    }
+  }
+  allDossiers = allDossiers.map((d: any) => ({
+    ...d,
+    tenant: tenantMap[d.tenant_id] || null,
+  }))
+
+  // Fetch hero photos for each dossier
+  const dossiersWithPhotos = await Promise.all(
+    allDossiers.map(async (dossier: any) => {
+      const { data: tripData } = await supabase
+        .from('trips' as any)
+        .select('id')
+        .eq('dossier_id', dossier.id)
+        .order('created_at', { ascending: false })
+        .limit(1) as { data: any[] | null }
+
+      const trip = tripData?.[0]
+      let heroPhotoUrl: string | null = null
+
+      if (trip) {
+        const { data: photos } = await supabase
+          .from('trip_photos' as any)
+          .select('url_hero, url_medium, url_large, is_hero')
+          .eq('trip_id', trip.id)
+          .order('sort_order', { ascending: true })
+          .limit(3) as { data: any[] | null }
+
+        const heroPhoto = photos?.find((p: any) => p.is_hero) ?? photos?.[0]
+        heroPhotoUrl = heroPhoto?.url_hero ?? heroPhoto?.url_large ?? heroPhoto?.url_medium ?? null
+      }
+
+      const totalTravelers = (dossier.adults_count || 0) + (dossier.children_count || 0)
+      return { ...dossier, heroPhotoUrl, totalTravelers }
+    })
+  )
 
   // Séparer les voyages actifs et passés
   const now = new Date()
-  const activeDossiers = allDossiers.filter((d: any) => {
+  const activeDossiers = dossiersWithPhotos.filter((d: any) => {
     if (d.status === 'lost') return false
     if (!d.travel_date_end) return true
     return new Date(d.travel_date_end) >= now
   })
 
-  const pastDossiers = allDossiers.filter((d: any) => {
+  const pastDossiers = dossiersWithPhotos.filter((d: any) => {
     if (d.status === 'lost') return true
     if (!d.travel_date_end) return false
     return new Date(d.travel_date_end) < now
   })
 
-  const DossierCard = ({ dossier }: { dossier: any }) => {
-    const status = statusLabels[dossier.status] || { label: dossier.status, variant: 'secondary' as const }
-    const totalTravelers = (dossier.adults_count || 0) + (dossier.children_count || 0)
-
-    return (
-      <Link href={`/client/voyages/${dossier.id}`}>
-        <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
-          <CardContent className="p-4">
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-2">
-                  <Badge variant={status.variant}>{status.label}</Badge>
-                  <span className="text-xs text-muted-foreground">{dossier.reference}</span>
-                </div>
-                <h3 className="font-semibold text-lg mb-2">{dossier.title}</h3>
-
-                <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-                  {dossier.destination_country && (
-                    <div className="flex items-center gap-1">
-                      <MapPin className="h-4 w-4" />
-                      <span>{dossier.destination_country}</span>
-                    </div>
-                  )}
-                  {dossier.travel_date_start && (
-                    <div className="flex items-center gap-1">
-                      <Calendar className="h-4 w-4" />
-                      <span>
-                        {new Date(dossier.travel_date_start).toLocaleDateString('fr-FR', {
-                          day: 'numeric',
-                          month: 'short',
-                          year: 'numeric',
-                        })}
-                        {dossier.travel_date_end && (
-                          <>
-                            {' - '}
-                            {new Date(dossier.travel_date_end).toLocaleDateString('fr-FR', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric',
-                            })}
-                          </>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                  {totalTravelers > 0 && (
-                    <div className="flex items-center gap-1">
-                      <Users className="h-4 w-4" />
-                      <span>{totalTravelers} voyageur{totalTravelers > 1 ? 's' : ''}</span>
-                    </div>
-                  )}
-                  {dossier.tenant?.name && (
-                    <div className="flex items-center gap-1">
-                      <Building2 className="h-4 w-4" />
-                      <span>{dossier.tenant.name}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <ArrowRight className="h-5 w-5 text-muted-foreground mt-1" />
-            </div>
-          </CardContent>
-        </Card>
-      </Link>
-    )
-  }
+  const renderGrid = (dossiers: any[]) => (
+    <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      {dossiers.map((dossier: any) => (
+        <DestinationCard
+          key={dossier.id}
+          dossierId={dossier.id}
+          title={dossier.title}
+          destination={dossier.destination_country}
+          travelDateStart={dossier.travel_date_start}
+          travelDateEnd={dossier.travel_date_end}
+          status={dossier.status}
+          heroPhotoUrl={dossier.heroPhotoUrl}
+          tenantName={dossier.tenant?.name}
+          totalTravelers={dossier.totalTravelers}
+          destinationCountryCode={dossier.destination_country}
+        />
+      ))}
+    </div>
+  )
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
       <div>
-        <h1 className="text-2xl font-bold">Mes Voyages</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-2xl font-bold text-gray-900">Mes Voyages</h1>
+        <p className="text-gray-500 mt-1">
           Retrouvez tous vos projets de voyage
         </p>
       </div>
@@ -180,39 +176,29 @@ export default async function ClientVoyagesPage() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="active" className="mt-4">
+        <TabsContent value="active" className="mt-6">
           {activeDossiers.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground">
-                  Aucun voyage en cours pour le moment.
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4">
-              {activeDossiers.map((dossier: any) => (
-                <DossierCard key={dossier.id} dossier={dossier} />
-              ))}
+            <div className="text-center py-12">
+              <HeartStraight size={40} weight="duotone" className="mx-auto mb-3 text-gray-200" />
+              <p className="text-sm text-gray-500">
+                Aucun voyage en cours pour le moment.
+              </p>
             </div>
+          ) : (
+            renderGrid(activeDossiers)
           )}
         </TabsContent>
 
-        <TabsContent value="past" className="mt-4">
+        <TabsContent value="past" className="mt-6">
           {pastDossiers.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground">
-                  Aucun voyage passé.
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4">
-              {pastDossiers.map((dossier: any) => (
-                <DossierCard key={dossier.id} dossier={dossier} />
-              ))}
+            <div className="text-center py-12">
+              <HeartStraight size={40} weight="duotone" className="mx-auto mb-3 text-gray-200" />
+              <p className="text-sm text-gray-500">
+                Aucun voyage passé.
+              </p>
             </div>
+          ) : (
+            renderGrid(pastDossiers)
           )}
         </TabsContent>
       </Tabs>
