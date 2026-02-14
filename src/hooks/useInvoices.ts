@@ -26,6 +26,13 @@ export interface InvoiceFilters {
   search?: string;
   page?: number;
   page_size?: number;
+  // Standalone invoices page filters
+  created_by_id?: string;
+  date_from?: string;
+  date_to?: string;
+  due_date_from?: string;
+  due_date_to?: string;
+  overdue?: boolean;
 }
 
 export interface InvoiceListResponse {
@@ -96,13 +103,19 @@ export function useInvoices(filters?: InvoiceFilters) {
     if (filters?.search) parts.push(`search=${encodeURIComponent(filters.search)}`);
     if (filters?.page) parts.push(`page=${filters.page}`);
     if (filters?.page_size) parts.push(`page_size=${filters.page_size}`);
+    if (filters?.created_by_id) parts.push(`created_by_id=${filters.created_by_id}`);
+    if (filters?.date_from) parts.push(`date_from=${filters.date_from}`);
+    if (filters?.date_to) parts.push(`date_to=${filters.date_to}`);
+    if (filters?.due_date_from) parts.push(`due_date_from=${filters.due_date_from}`);
+    if (filters?.due_date_to) parts.push(`due_date_to=${filters.due_date_to}`);
+    if (filters?.overdue) parts.push(`overdue=true`);
     const qs = parts.length > 0 ? `?${parts.join('&')}` : '';
     return apiClient.get<InvoiceListResponse>(`/invoices${qs}`);
-  }, [filters?.dossier_id, filters?.type, filters?.status, filters?.search, filters?.page, filters?.page_size]);
+  }, [filters?.dossier_id, filters?.type, filters?.status, filters?.search, filters?.page, filters?.page_size, filters?.created_by_id, filters?.date_from, filters?.date_to, filters?.due_date_from, filters?.due_date_to, filters?.overdue]);
 
   const result = useApi(fetcher, {
     immediate: true,
-    deps: [filters?.dossier_id, filters?.type, filters?.status, filters?.search, filters?.page, filters?.page_size],
+    deps: [filters?.dossier_id, filters?.type, filters?.status, filters?.search, filters?.page, filters?.page_size, filters?.created_by_id, filters?.date_from, filters?.date_to, filters?.due_date_from, filters?.due_date_to, filters?.overdue],
   });
 
   // ---- Create ----
@@ -167,6 +180,18 @@ export function useInvoices(filters?: InvoiceFilters) {
     }
   );
 
+  // ---- Share (generate public link) ----
+  const shareMutation = useMutation(
+    async (id: number) => {
+      return apiClient.post<{
+        share_token: string;
+        share_url: string;
+        created_at: string;
+        viewed_at: string | null;
+      }>(`/invoices/${id}/share`, {});
+    }
+  );
+
   // ---- Add Line ----
   const addLineMutation = useMutation(
     async ({ invoiceId, data }: { invoiceId: number; data: InvoiceLineCreate }) => {
@@ -185,6 +210,16 @@ export function useInvoices(filters?: InvoiceFilters) {
   const deleteLineMutation = useMutation(
     async ({ invoiceId, lineId }: { invoiceId: number; lineId: number }) => {
       return apiClient.delete(`/invoices/${invoiceId}/lines/${lineId}`);
+    }
+  );
+
+  // ---- Toggle Reminder ----
+  const toggleReminderMutation = useMutation(
+    async ({ id, enabled }: { id: number; enabled: boolean }) => {
+      return apiClient.patch<{ message: string; reminder_enabled: boolean; reminder_date: string | null }>(
+        `/invoices/${id}/reminder`,
+        { enabled }
+      );
     }
   );
 
@@ -214,6 +249,9 @@ export function useInvoices(filters?: InvoiceFilters) {
     cancelling: cancelMutation.loading,
     advance: advanceMutation.mutate,
     advancing: advanceMutation.loading,
+    // Share
+    share: shareMutation.mutate,
+    sharing: shareMutation.loading,
     // Lines
     addLine: addLineMutation.mutate,
     addingLine: addLineMutation.loading,
@@ -221,6 +259,9 @@ export function useInvoices(filters?: InvoiceFilters) {
     updatingLine: updateLineMutation.loading,
     deleteLine: deleteLineMutation.mutate,
     deletingLine: deleteLineMutation.loading,
+    // Reminder
+    toggleReminder: toggleReminderMutation.mutate,
+    togglingReminder: toggleReminderMutation.loading,
   };
 }
 
@@ -246,6 +287,34 @@ export function useInvoiceDetail(invoiceId: number | undefined) {
     isLoading: result.loading,
     error: result.error,
     refetch: result.refetch,
+  };
+}
+
+// ─── Standalone: Get Invoice Sellers ──────────────────────────────────────────
+
+export interface InvoiceSeller {
+  id: string;
+  name: string;
+}
+
+/**
+ * Hook for fetching distinct sellers (users who created invoices).
+ * GET /invoices/sellers
+ */
+export function useInvoiceSellers() {
+  const fetcher = useCallback(async () => {
+    return apiClient.get<InvoiceSeller[]>('/invoices/sellers');
+  }, []);
+
+  const result = useApi(fetcher, {
+    immediate: true,
+    deps: [],
+  });
+
+  return {
+    sellers: result.data || [],
+    isLoading: result.loading,
+    error: result.error,
   };
 }
 

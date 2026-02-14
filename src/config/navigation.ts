@@ -26,6 +26,13 @@ import {
   ClipboardList,
   Bell,
   SlidersHorizontal,
+  BookOpen,
+  Layout,
+  UserCircle,
+  MessageSquare,
+  Palette,
+  Mail,
+  Calendar,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -62,6 +69,26 @@ export interface NavItem {
   icon: LucideIcon;
   section: AppSection;
   badge?: string; // Pour afficher un compteur
+}
+
+/**
+ * Groupe de navigation (sous-section avec label)
+ */
+export interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+/**
+ * Items de navigation : peut être un item simple ou un groupe
+ */
+export type SectionNavItems = (NavItem | NavGroup)[];
+
+/**
+ * Type guard : vérifie si un élément est un NavGroup
+ */
+export function isNavGroup(item: NavItem | NavGroup): item is NavGroup {
+  return 'items' in item;
 }
 
 /**
@@ -126,11 +153,14 @@ export const sections: Record<AppSection, SectionConfig> = {
 
 /**
  * Items de navigation par section
+ * Les sections avec NavGroup utilisent navItemsBySectionGrouped
+ * Les sections plates utilisent navItemsBySection
  */
 export const navItemsBySection: Record<AppSection, NavItem[]> = {
   commercial: [
     { href: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'commercial' },
     { href: '/admin/dossiers', label: 'Dossiers', icon: FolderKanban, section: 'commercial' },
+    { href: '/admin/invoices', label: 'Factures', icon: Receipt, section: 'commercial' },
     { href: '/admin/circuits', label: 'Circuits', icon: Map, section: 'commercial' },
     { href: '/admin/templates', label: 'Templates', icon: LayoutTemplate, section: 'commercial' },
     { href: '/admin/participants', label: 'Participants', icon: Users, section: 'commercial' },
@@ -143,10 +173,10 @@ export const navItemsBySection: Record<AppSection, NavItem[]> = {
     { href: '/admin/tasks', label: 'Tâches', icon: Bell, section: 'logistics' },
   ],
   cms: [
-    { href: '/admin/content', label: 'Contenus', icon: FileText, section: 'cms' },
-    { href: '/admin/pages', label: 'Pages', icon: Globe, section: 'cms' },
-    { href: '/admin/media', label: 'Médias', icon: Image, section: 'cms' },
-    { href: '/admin/seo', label: 'SEO', icon: Search, section: 'cms' },
+    { href: '/admin/content/guide', label: 'Contenus', icon: FileText, section: 'cms' },
+    { href: '/admin/content/site', label: 'Pages', icon: Globe, section: 'cms' },
+    { href: '/admin/content/site/media', label: 'Médias', icon: Image, section: 'cms' },
+    { href: '/admin/content/client/faq', label: 'FAQ', icon: HelpCircle, section: 'cms' },
   ],
   accounting: [
     { href: '/admin/invoices', label: 'Factures clients', icon: Receipt, section: 'accounting' },
@@ -162,8 +192,40 @@ export const navItemsBySection: Record<AppSection, NavItem[]> = {
   admin: [
     { href: '/admin/tenants', label: 'Sites / DMC', icon: Building2, section: 'admin' },
     { href: '/admin/users', label: 'Utilisateurs', icon: UserCog, section: 'admin' },
+    { href: '/admin/settings/availability', label: 'Disponibilités', icon: Calendar, section: 'admin' },
     { href: '/admin/api-keys', label: 'Clés API', icon: Key, section: 'admin' },
     { href: '/admin/settings', label: 'Paramètres', icon: Settings, section: 'admin' },
+  ],
+};
+
+/**
+ * Navigation groupée pour les sections qui ont des sous-sections
+ * Utilisé par AdminSidebar pour rendre des groupes avec labels
+ */
+export const navGroupedBySection: Partial<Record<AppSection, SectionNavItems>> = {
+  cms: [
+    {
+      label: 'Guide de voyage',
+      items: [
+        { href: '/admin/content/guide', label: 'Contenus', icon: BookOpen, section: 'cms' },
+      ],
+    },
+    {
+      label: 'Le site',
+      items: [
+        { href: '/admin/content/site', label: 'Pages', icon: Layout, section: 'cms', badge: 'À venir' },
+        { href: '/admin/content/site/design', label: 'Design', icon: Palette, section: 'cms', badge: 'À venir' },
+        { href: '/admin/content/site/media', label: 'Médias', icon: Image, section: 'cms', badge: 'À venir' },
+      ],
+    },
+    {
+      label: 'Espace client',
+      items: [
+        { href: '/admin/content/client/faq', label: 'FAQ', icon: HelpCircle, section: 'cms' },
+        { href: '/admin/content/client/widgets', label: 'Widgets & textes', icon: MessageSquare, section: 'cms' },
+        { href: '/admin/content/client/emails', label: 'Emails', icon: Mail, section: 'cms', badge: 'À venir' },
+      ],
+    },
   ],
 };
 
@@ -185,10 +247,10 @@ export const sectionOrder: AppSection[] = [
 export function getSectionFromPath(pathname: string): AppSection {
   // Mapping des chemins vers les sections
   const pathMappings: { pattern: RegExp; section: AppSection }[] = [
-    { pattern: /^\/admin\/(dashboard|dossiers|circuits|templates|locations|participants|configuration)/, section: 'commercial' },
+    { pattern: /^\/admin\/(dashboard|dossiers|circuits|templates|locations|participants|configuration|invoices)/, section: 'commercial' },
     { pattern: /^\/admin\/(calendar|suppliers|reservations|tasks)/, section: 'logistics' },
-    { pattern: /^\/admin\/(content|pages|media|seo)/, section: 'cms' },
-    { pattern: /^\/admin\/(invoices|payments|cashflow|aging)/, section: 'accounting' },
+    { pattern: /^\/admin\/content/, section: 'cms' },
+    { pattern: /^\/admin\/(payments|cashflow|aging)/, section: 'accounting' },
     { pattern: /^\/admin\/analytics/, section: 'analytics' },
     { pattern: /^\/admin\/(tenants|users|api-keys|settings)/, section: 'admin' },
   ];

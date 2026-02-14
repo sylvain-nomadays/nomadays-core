@@ -10,6 +10,8 @@ import {
   FileText,
   Users,
   ChevronRight,
+  Landmark,
+  Tag,
 } from 'lucide-react';
 
 interface ConfigCategory {
@@ -21,6 +23,12 @@ interface ConfigCategory {
 }
 
 const configCategories: ConfigCategory[] = [
+  {
+    title: 'Informations entreprise',
+    description: 'Raison sociale, adresse, numéros légaux — apparaissent sur toutes vos factures',
+    href: '/admin/configuration/company',
+    icon: Landmark,
+  },
   {
     title: 'Agences partenaires',
     description: 'Gérez vos partenaires B2B et leur branding white-label',
@@ -53,17 +61,22 @@ const configCategories: ConfigCategory[] = [
     badge: 'À venir',
   },
   {
+    title: 'Codes promo',
+    description: 'Gérez les codes promo et bons de réduction pour vos clients',
+    href: '/admin/configuration/promo-codes',
+    icon: Tag,
+  },
+  {
     title: 'Taux de TVA',
     description: 'Configurez les taux de TVA par pays et catégorie de service',
     href: '/admin/configuration/vat-rates',
     icon: DollarSign,
   },
   {
-    title: 'Modèles de documents',
-    description: 'Personnalisez vos modèles de devis et contrats',
-    href: '/admin/configuration/document-templates',
+    title: 'Conditions de vente',
+    description: 'Texte des conditions particulières de vente présentées aux clients avant paiement',
+    href: '/admin/configuration/sales-conditions',
     icon: FileText,
-    badge: 'À venir',
   },
 ];
 

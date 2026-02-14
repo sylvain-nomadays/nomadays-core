@@ -552,10 +552,10 @@ export function CreateInvoicePanel({
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Users className="h-4 w-4 text-muted-foreground" />
-                <Label className="text-sm font-medium">Nombre de personnes assurées</Label>
+                <Label className="text-sm font-medium">Nombre de personnes concernées par cette facture</Label>
               </div>
               <p className="text-xs text-muted-foreground">
-                Important pour l&apos;intégration Chapka. Indiquez le nombre total de voyageurs couverts par cette facture.
+                Important notamment si votre client choisit une assurance, le choix indiqué ici correspondra au nombre de personnes assurées.
               </p>
               <div className="flex items-center gap-2">
                 {[1, 2, 3, 4].map((n) => (

@@ -9,8 +9,13 @@ import { SectionSwitcher } from './SectionSwitcher';
 import {
   sections,
   navItemsBySection,
+  navGroupedBySection,
   getSectionFromPath,
+  isNavGroup,
   type AppSection,
+  type NavItem,
+  type NavGroup,
+  type SectionNavItems,
 } from '@/config/navigation';
 
 interface AdminSidebarProps {
@@ -18,11 +23,36 @@ interface AdminSidebarProps {
   userRole?: string;
 }
 
+function NavItemLink({ item, pathname }: { item: NavItem; pathname: string }) {
+  const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
+
+  return (
+    <Link
+      href={item.href}
+      className={cn(
+        'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+        isActive
+          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+          : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+      )}
+    >
+      <item.icon className="h-4 w-4" />
+      {item.label}
+      {item.badge && (
+        <span className="ml-auto text-xs bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">
+          {item.badge}
+        </span>
+      )}
+    </Link>
+  );
+}
+
 export function AdminSidebar({ userEmail, userRole = 'Admin' }: AdminSidebarProps) {
   const pathname = usePathname();
   const currentSection = getSectionFromPath(pathname);
   const sectionConfig = sections[currentSection];
-  const navItems = navItemsBySection[currentSection];
+  const groupedNav = navGroupedBySection[currentSection];
+  const flatNav = navItemsBySection[currentSection];
 
   return (
     <aside className="w-64 border-r bg-sidebar flex flex-col">
@@ -39,31 +69,36 @@ export function AdminSidebar({ userEmail, userRole = 'Admin' }: AdminSidebarProp
       </div>
 
       {/* Main navigation - contextuel à la section */}
-      <nav className="flex-1 p-3 space-y-1">
-        {navItems.map((item) => {
-          const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
-
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-              )}
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-              {item.badge && (
-                <span className="ml-auto text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
-                  {item.badge}
-                </span>
-              )}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 p-3 overflow-y-auto">
+        {groupedNav ? (
+          /* Navigation groupée (ex: CMS avec sous-sections) */
+          <div className="space-y-4">
+            {groupedNav.map((entry, idx) => {
+              if (isNavGroup(entry)) {
+                return (
+                  <div key={entry.label}>
+                    <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {entry.label}
+                    </div>
+                    <div className="space-y-0.5 mt-0.5">
+                      {entry.items.map((item) => (
+                        <NavItemLink key={item.href} item={item} pathname={pathname} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+              return <NavItemLink key={entry.href} item={entry} pathname={pathname} />;
+            })}
+          </div>
+        ) : (
+          /* Navigation plate (sections classiques) */
+          <div className="space-y-1">
+            {flatNav.map((item) => (
+              <NavItemLink key={item.href} item={item} pathname={pathname} />
+            ))}
+          </div>
+        )}
       </nav>
 
       {/* Bottom navigation */}

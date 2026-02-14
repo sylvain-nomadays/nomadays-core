@@ -3399,6 +3399,7 @@ export interface InvoicePaymentLink {
   paid_amount?: number | null;
   payment_method?: string | null;
   payment_ref?: string | null;
+  payment_url?: string | null;
 }
 
 export interface InvoiceSummary {
@@ -3419,7 +3420,17 @@ export interface InvoiceSummary {
   parent_invoice_id?: number | null;
   dossier_id?: string | null;
   pax_count?: number | null;
+  share_token?: string | null;
   created_at: string;
+  // Extra fields for standalone invoices page
+  dossier_reference?: string | null;
+  created_by_name?: string | null;
+  travel_start_date?: string | null;
+  travel_end_date?: string | null;
+  // Payment reminder
+  reminder_enabled?: boolean;
+  reminder_date?: string | null;
+  reminder_sent_at?: string | null;
 }
 
 export interface Invoice {
@@ -3493,6 +3504,14 @@ export interface Invoice {
   created_by_id?: string | null;
   sent_at?: string | null;
   sent_to_email?: string | null;
+  // Sharing
+  share_token?: string | null;
+  share_token_created_at?: string | null;
+  shared_link_viewed_at?: string | null;
+  // Payment reminder
+  reminder_enabled?: boolean;
+  reminder_date?: string | null;
+  reminder_sent_at?: string | null;
   created_at: string;
   updated_at: string;
   // Nested
@@ -3615,4 +3634,113 @@ export interface ForexHedge {
   notes?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ============================================================================
+// Public Invoice Page Types
+// ============================================================================
+
+export interface PublicPaymentLink {
+  id: number;
+  payment_type: string;
+  amount: number;
+  due_date: string | null;
+  status: string;
+  paid_at: string | null;
+  payment_url: string | null;
+}
+
+export interface BillingAddress {
+  line1: string;
+  line2: string;
+  city: string;
+  postal: string;
+  country: string;
+}
+
+export interface BankTransferInfo {
+  bank_name: string;
+  iban: string;
+  bic: string;
+  account_holder: string;
+  bank_address: string;
+}
+
+export interface InsuranceOption {
+  type: string;
+  label: string;
+  price_per_pax: number;
+  available: boolean;
+}
+
+export interface SelectedInsurance {
+  type: string;
+  label: string;
+  total: number;
+  line_id: number;
+}
+
+export interface AppliedPromo {
+  description: string;
+  discount_amount: number;
+  line_id: number;
+}
+
+export interface InvoicePublicData {
+  number: string;
+  type: string;
+  type_label: string;
+  status: string;
+  client_name: string | null;
+  total_ttc: number;
+  currency: string;
+  issue_date: string | null;
+  company_name: string;
+  html: string;
+  payment_links: PublicPaymentLink[];
+  // Pre-invoice validation fields
+  is_proforma: boolean;
+  billing_address: BillingAddress | null;
+  billing_address_validated: boolean;
+  bank_transfer_info: BankTransferInfo | null;
+  insurance_options: InsuranceOption[];
+  selected_insurance: SelectedInsurance | null;
+  applied_promo: AppliedPromo | null;
+  pax_count: number;
+  cgv_accepted: boolean;
+  cgv_html: string | null;
+  // Voyage info
+  destination: string | null;
+  partner_name: string | null;
+  dossier_reference: string | null;
+}
+
+// ============================================================================
+// Promo Code Types (Admin)
+// ============================================================================
+
+export type PromoDiscountType = 'fixed' | 'percentage';
+
+export interface PromoCode {
+  id: number;
+  code: string;
+  description: string | null;
+  discount_type: PromoDiscountType;
+  discount_value: number;
+  currency: string;
+  min_amount: number;
+  max_uses: number | null;
+  current_uses: number;
+  valid_from: string | null;
+  valid_until: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromoCodeUsage {
+  id: number;
+  invoice_id: number;
+  discount_amount: number;
+  applied_at: string;
 }

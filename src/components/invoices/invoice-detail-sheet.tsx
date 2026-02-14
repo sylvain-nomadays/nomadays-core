@@ -19,6 +19,9 @@ import {
   X,
   Users,
   GripVertical,
+  Link2,
+  Check,
+  Eye,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -345,8 +348,11 @@ export function InvoiceDetailSheet({
     updatingLine,
     deleteLine,
     deletingLine,
+    share,
+    sharing,
   } = useInvoices()
 
+  const [copied, setCopied] = useState(false)
   const isOpen = invoiceId !== undefined
   // DEV et PRO sont des documents commerciaux : éditables en draft + sent
   // FA et AV sont des documents définitifs (loi française) : éditables en draft uniquement
@@ -500,10 +506,14 @@ export function InvoiceDetailSheet({
   const handleGeneratePdf = async () => {
     if (!invoiceId) return
     try {
-      await generatePdf(invoiceId)
+      const result = await generatePdf(invoiceId)
       refetch()
       onRefresh()
       toast.success('PDF généré avec succès')
+      // Auto-open PDF in new tab for immediate download
+      if (result?.pdf_url) {
+        window.open(result.pdf_url, '_blank')
+      }
     } catch {
       toast.error('Erreur lors de la génération du PDF')
     }
@@ -1188,12 +1198,12 @@ export function InvoiceDetailSheet({
                 <div>
                   <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                     <Users className="h-3.5 w-3.5 inline mr-1" />
-                    Personnes assurées
+                    Personnes concernées
                   </h4>
                   {isEditing ? (
                     <div className="space-y-2">
                       <p className="text-xs text-muted-foreground">
-                        Nombre de voyageurs couverts par cette facture (pour l&apos;intégration Chapka).
+                        Important notamment si votre client choisit une assurance, le choix indiqué ici correspondra au nombre de personnes assurées.
                       </p>
                       <div className="flex items-center gap-2">
                         {[1, 2, 3, 4].map((n) => (
@@ -1282,16 +1292,42 @@ export function InvoiceDetailSheet({
                     disabled={generatingPdf}
                   >
                     <Download className="h-4 w-4 mr-1" />
-                    {generatingPdf ? 'Génération...' : 'Générer PDF'}
+                    {generatingPdf ? 'Génération...' : 'Télécharger PDF'}
                   </Button>
 
-                  {invoice.pdf_url && (
-                    <Button variant="outline" size="sm" asChild>
-                      <a href={invoice.pdf_url} target="_blank" rel="noopener noreferrer">
-                        <Download className="h-4 w-4 mr-1" />
-                        Télécharger
-                      </a>
+                  {invoice.status !== 'draft' && invoice.status !== 'cancelled' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          let token = invoice.share_token
+                          if (!token) {
+                            const result = await share(invoice.id)
+                            token = result.share_token
+                            refetch()
+                          }
+                          const url = `${window.location.origin}/invoices/${token}`
+                          await navigator.clipboard.writeText(url)
+                          setCopied(true)
+                          toast.success('Lien copié dans le presse-papiers')
+                          setTimeout(() => setCopied(false), 2000)
+                        } catch {
+                          toast.error('Erreur lors de la création du lien de partage')
+                        }
+                      }}
+                      disabled={sharing}
+                    >
+                      {copied ? <Check className="h-4 w-4 mr-1" /> : <Link2 className="h-4 w-4 mr-1" />}
+                      {sharing ? 'Création...' : copied ? 'Copié !' : invoice.share_token ? 'Copier le lien' : 'Partager'}
                     </Button>
+                  )}
+
+                  {invoice.shared_link_viewed_at && (
+                    <span className="text-xs text-muted-foreground flex items-center gap-1 ml-1">
+                      <Eye className="h-3 w-3" />
+                      Vu le {format(new Date(invoice.shared_link_viewed_at), 'dd/MM/yyyy à HH:mm', { locale: fr })}
+                    </span>
                   )}
 
                   {(invoice.status === 'draft' || (

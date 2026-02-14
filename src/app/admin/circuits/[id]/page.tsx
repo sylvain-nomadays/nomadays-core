@@ -45,6 +45,7 @@ import {
   BookOpen,
   FolderOpen,
   ClipboardList,
+  MessageSquare,
 } from 'lucide-react';
 import { useTrip, useUpdateTrip, useTripPhotos, useRegenerateTripPhoto, useUploadTripPhoto, useCreateTripDay, useUpdateTripDay, useDeleteTripDay, useExtendTripDay, useReorderDays } from '@/hooks/useTrips';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -113,6 +114,12 @@ const RoadbookEditor = dynamic(
   { loading: () => <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-[#0FB6BC] animate-spin" /></div> }
 );
 
+// Lazy load EchangesTab
+const EchangesTab = dynamic(
+  () => import('@/components/circuits/echanges/EchangesTab'),
+  { loading: () => <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-[#0FB6BC] animate-spin" /></div> }
+);
+
 // Map destination country code → local currency code
 function getLocalCurrency(destinationCountry: string): string {
   const map: Record<string, string> = {
@@ -136,7 +143,7 @@ const defaultPaxConfigs: { pax: number; rooms: number }[] = [
   { pax: 6, rooms: 3 },
 ];
 
-type TabType = 'presentation' | 'program' | 'roadbook' | 'cotations' | 'tarification';
+type TabType = 'presentation' | 'program' | 'roadbook' | 'cotations' | 'tarification' | 'echanges';
 
 export default function CircuitDetailPage() {
   const params = useParams();
@@ -841,6 +848,7 @@ export default function CircuitDetailPage() {
             { id: 'roadbook', label: 'Roadbook', icon: BookOpen },
             { id: 'cotations', label: 'Cotations', icon: Calculator },
             { id: 'tarification', label: 'Tarification', icon: DollarSign },
+            { id: 'echanges', label: 'Échanges', icon: MessageSquare },
           ].map(tab => (
             <button
               key={tab.id}
@@ -2331,6 +2339,10 @@ export default function CircuitDetailPage() {
         </div>
       )}
 
+
+      {activeTab === 'echanges' && (
+        <EchangesTab tripId={trip.id} tenantId={trip.tenant_id} />
+      )}
 
       {/* Pre-Booking Dialog */}
       <PreBookingDialog

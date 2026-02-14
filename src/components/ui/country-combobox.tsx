@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, ChevronsUpDown } from 'lucide-react'
+import { Check, CaretUpDown } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -53,7 +53,7 @@ export function CountryCombobox({
           ) : (
             <span className="text-muted-foreground">{placeholder}</span>
           )}
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          <CaretUpDown size={16} weight="duotone" className="ml-2 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[280px] p-0" align="start">
@@ -72,8 +72,10 @@ export function CountryCombobox({
                   }}
                 >
                   <Check
+                    size={16}
+                    weight="bold"
                     className={cn(
-                      'mr-2 h-4 w-4',
+                      'mr-2',
                       value === country.code ? 'opacity-100' : 'opacity-0'
                     )}
                   />

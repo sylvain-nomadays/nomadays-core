@@ -15,6 +15,7 @@ import {
   Receipt,
   Pencil,
   HelpCircle,
+  Link2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -134,6 +135,8 @@ export function InvoicesSection({
     cancelling,
     advance,
     advancing,
+    share,
+    sharing,
     remove,
     removing,
   } = useInvoices({
@@ -156,9 +159,12 @@ export function InvoicesSection({
 
   const handleGeneratePdf = async (id: number) => {
     try {
-      await generatePdf(id)
+      const result = await generatePdf(id)
       refetch()
       toast.success('PDF généré avec succès')
+      if (result?.pdf_url) {
+        window.open(result.pdf_url, '_blank')
+      }
     } catch {
       toast.error('Erreur lors de la génération du PDF')
     }
@@ -451,14 +457,28 @@ export function InvoicesSection({
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => handleGeneratePdf(invoice.id)}>
                       <Download className="h-4 w-4 mr-2" />
-                      Générer PDF
+                      Télécharger PDF
                     </DropdownMenuItem>
-                    {invoice.pdf_url && (
-                      <DropdownMenuItem asChild>
-                        <a href={invoice.pdf_url} target="_blank" rel="noopener noreferrer">
-                          <Download className="h-4 w-4 mr-2" />
-                          Télécharger PDF
-                        </a>
+                    {invoice.status !== 'draft' && invoice.status !== 'cancelled' && (
+                      <DropdownMenuItem
+                        onClick={async () => {
+                          try {
+                            let token = invoice.share_token
+                            if (!token) {
+                              const result = await share(invoice.id)
+                              token = result.share_token
+                              refetch()
+                            }
+                            const url = `${window.location.origin}/invoices/${token}`
+                            await navigator.clipboard.writeText(url)
+                            toast.success('Lien copié dans le presse-papiers')
+                          } catch {
+                            toast.error('Erreur lors de la création du lien')
+                          }
+                        }}
+                      >
+                        <Link2 className="h-4 w-4 mr-2" />
+                        {invoice.share_token ? 'Copier le lien' : 'Créer lien de partage'}
                       </DropdownMenuItem>
                     )}
                     {/* Modifier : DEV/PRO en draft+sent, FA/AV en draft uniquement */}

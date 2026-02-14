@@ -31,6 +31,7 @@ export interface BookingListItem {
   pax_count?: number | null;
   guest_names?: string | null;
   email_sent_at?: string | null;
+  logistics_alternative?: string | null;
   created_at: string;
 }
 
@@ -73,6 +74,12 @@ export interface BookableItem {
   booking_requested_by?: string | null;
   booking_days_waiting?: number | null;
   booking_overdue?: boolean;
+  // Echanges tab fields
+  cost_nature_code?: string | null;
+  cost_nature_label?: string | null;
+  booking_id?: number | null;
+  supplier_response_note?: string | null;
+  logistics_alternative?: string | null;
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
