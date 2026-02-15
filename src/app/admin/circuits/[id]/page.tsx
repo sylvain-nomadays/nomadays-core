@@ -17,8 +17,6 @@ import {
   MapPin,
   Euro,
   AlertTriangle,
-  CheckCircle,
-  Copy,
   FileText,
   Settings,
   Clock,
@@ -74,6 +72,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import type { Trip, TripDay, Formula, QuotationResult, TripHighlight, InclusionItem, DescriptionTone, CostNature, Item, PaxConfig, RoomDemandEntry, LocationPhoto } from '@/lib/api/types';
+import { createClient as createSupabaseBrowser } from '@/lib/supabase/client';
 import {
   TripMapEditor,
   TripPresentationEditor,
@@ -94,7 +93,6 @@ import { useEarlyBirdAlerts } from '@/hooks/useEarlyBirdAlerts';
 import { useTripConditions } from '@/hooks/useConditions';
 import { TRIP_STATUS, getStatusConfig, TONE_OPTIONS } from '@/lib/constants/circuits';
 import { getCountryFlag, getCountryName } from '@/lib/constants/countries';
-import { SelectCircuitDialog } from '@/components/dossiers/select-circuit-dialog';
 
 // Lazy load CotationsTab to avoid loading cotation dependencies when tab is inactive
 const CotationsTab = dynamic(
@@ -333,9 +331,6 @@ export default function CircuitDetailPage() {
   // Pre-booking state
   const [showPreBookingDialog, setShowPreBookingDialog] = useState(false);
 
-  // Select for dossier state
-  const [showSelectForDossier, setShowSelectForDossier] = useState(false);
-
   // Translation state
   const [showTranslateModal, setShowTranslateModal] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<string>('');
@@ -385,7 +380,35 @@ export default function CircuitDetailPage() {
   const [tarificationCotationId, setTarificationCotationId] = useState<number | null>(null);
   const activeTarificationCotation = tarificationCotations.find(c => c.id === tarificationCotationId)
     || tarificationCotations.find(c => c.status === 'calculated')
+    || tarificationCotations[0]
     || null;
+
+  // Fetch selected_cotation_id from dossier (if trip is linked to a dossier)
+  const [selectedCotationId, setSelectedCotationId] = useState<number | null>(null);
+  useEffect(() => {
+    if (!trip?.dossier_id) { setSelectedCotationId(null); return; }
+    const dossierId = trip.dossier_id;
+    const fetchSelection = async () => {
+      try {
+        const supabase = createSupabaseBrowser();
+        const { data, error } = await supabase
+          .from('dossiers')
+          .select('selected_cotation_id')
+          .eq('id', dossierId)
+          .single();
+        if (error) {
+          console.error('[CircuitPage] Failed to fetch selected_cotation_id:', error);
+          setSelectedCotationId(null);
+          return;
+        }
+        setSelectedCotationId((data as any)?.selected_cotation_id ?? null);
+      } catch (err) {
+        console.error('[CircuitPage] Failed to fetch dossier:', err);
+        setSelectedCotationId(null);
+      }
+    };
+    fetchSelection();
+  }, [trip?.dossier_id]);
 
   // Cost natures are now fetched via useCostNatures() hook above
 
@@ -787,19 +810,6 @@ export default function CircuitDetailPage() {
                 </span>
               )}
             </button>
-            <button className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50">
-              <Copy className="w-4 h-4" />
-              Dupliquer
-            </button>
-            {trip.dossier_id && trip.status === 'sent' && (
-              <button
-                onClick={() => setShowSelectForDossier(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 border border-[#0FB6BC] text-[#0FB6BC] rounded-lg hover:bg-[#E6F9FA] transition-colors"
-              >
-                <CheckCircle className="w-4 h-4" />
-                Sélectionner pour le dossier
-              </button>
-            )}
             <button
               onClick={() => setShowPreBookingDialog(true)}
               className="inline-flex items-center gap-2 px-4 py-2 border border-[#CCF3F5] text-[#0C9296] rounded-lg hover:bg-[#E6F9FA] transition-colors"
@@ -1597,29 +1607,39 @@ export default function CircuitDetailPage() {
       )}
 
       {activeTab === 'cotations' && (
-        <CotationsTab tripId={trip.id} tripType={trip.type} tripRoomDemand={trip.room_demand_json} tripPaxConfigs={trip.pax_configs} />
+        <CotationsTab tripId={trip.id} tripType={trip.type} tripRoomDemand={trip.room_demand_json} tripPaxConfigs={trip.pax_configs} selectedCotationId={selectedCotationId} />
       )}
 
       {activeTab === 'tarification' && (
         <div className="space-y-6">
-          {/* Conditions panel — change conditions to see price impact */}
-          <ConditionsPanel tripId={trip.id} onConditionsChanged={() => setConditionsVersion(v => v + 1)} />
-
           {/* Context Banner — pax composition, conditions, cotation */}
           {activeTarificationCotation?.results_json?.pax_configs && (
             (() => {
               const paxConfigs = activeTarificationCotation.results_json.pax_configs;
               const isRange = (activeTarificationCotation.tarification_json?.mode || 'range_web') === 'range_web';
-              // Derive conditions from cotation's condition_selections (not trip-level)
+              // Derive conditions from cotation's condition_selections (with trip-level fallback)
               const cotationSelections = activeTarificationCotation.condition_selections || {};
               const activeConditions: { id: number; conditionName: string; label: string }[] = [];
-              Object.entries(cotationSelections).forEach(([condIdStr, optionId]) => {
-                const tripCond = tarificationConditions.find(tc => tc.condition_id === Number(condIdStr));
-                if (tripCond) {
-                  const opt = tripCond.options?.find(o => o.id === optionId);
-                  if (opt) activeConditions.push({ id: tripCond.id, conditionName: tripCond.condition_name, label: opt.label });
-                }
-              });
+              const activeTripConditions = tarificationConditions.filter(tc => tc.is_active);
+
+              if (Object.keys(cotationSelections).length > 0) {
+                Object.entries(cotationSelections).forEach(([condIdStr, optionId]) => {
+                  const tripCond = tarificationConditions.find(tc => tc.condition_id === Number(condIdStr));
+                  if (tripCond) {
+                    const opt = tripCond.options?.find(o => o.id === optionId);
+                    if (opt) activeConditions.push({ id: tripCond.id, conditionName: tripCond.condition_name, label: opt.label });
+                  }
+                });
+              } else {
+                // Fallback: use trip-level default selections
+                activeTripConditions.forEach(tc => {
+                  const optionId = tc.selected_option_id;
+                  if (optionId) {
+                    const opt = tc.options?.find(o => o.id === optionId);
+                    if (opt) activeConditions.push({ id: tc.id, conditionName: tc.condition_name, label: opt.label });
+                  }
+                });
+              }
 
               // Parse pax composition from first pax_config args
               const firstConfig = paxConfigs[0];
@@ -1682,22 +1702,39 @@ export default function CircuitDetailPage() {
           )}
 
           {/* Cotation pills selector */}
-          {tarificationCotations.filter(c => c.status === 'calculated').length > 0 && (
+          {tarificationCotations.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-gray-500 mr-1">Cotation :</span>
-              {tarificationCotations.filter(c => c.status === 'calculated').map(cotation => (
-                <button
-                  key={cotation.id}
-                  onClick={() => setTarificationCotationId(cotation.id)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all ${
-                    activeTarificationCotation?.id === cotation.id
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  <span>{cotation.name}</span>
-                </button>
-              ))}
+              {tarificationCotations.map(cotation => {
+                const isCotSelected = selectedCotationId != null && cotation.id === selectedCotationId;
+                return (
+                  <button
+                    key={cotation.id}
+                    onClick={() => setTarificationCotationId(cotation.id)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all ${
+                      activeTarificationCotation?.id === cotation.id
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    <span>{cotation.name}</span>
+                    {isCotSelected && (
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                        activeTarificationCotation?.id === cotation.id
+                          ? 'bg-emerald-400/30 text-white'
+                          : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        Retenue
+                      </span>
+                    )}
+                    {cotation.status !== 'calculated' && (
+                      <span className="text-xs opacity-60">
+                        {cotation.status === 'calculating' ? '⏳' : cotation.status === 'error' ? '⚠️' : '○'}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -1920,15 +1957,7 @@ export default function CircuitDetailPage() {
                 <Calculator className="w-8 h-8 mx-auto mb-2 text-gray-300" />
                 <p className="text-sm mb-1">Aucune cotation disponible</p>
                 <p className="text-xs text-gray-400">
-                  Créez et calculez une cotation dans l&apos;onglet « Cotations » pour accéder à la tarification.
-                </p>
-              </div>
-            ) : !tarificationCotations.some(c => c.status === 'calculated') ? (
-              <div className="text-center py-8 text-gray-500">
-                <AlertTriangle className="w-8 h-8 mx-auto mb-2 text-amber-400" />
-                <p className="text-sm mb-1">Aucune cotation calculée</p>
-                <p className="text-xs text-gray-400">
-                  Lancez le calcul d&apos;une cotation pour pouvoir saisir la tarification.
+                  Créez une cotation dans l&apos;onglet « Cotations » pour accéder à la tarification.
                 </p>
               </div>
             ) : activeTarificationCotation ? (
@@ -1938,6 +1967,33 @@ export default function CircuitDetailPage() {
                 localCurrency={settingsData.destination_country ? getLocalCurrency(settingsData.destination_country) : undefined}
                 exchangeRate={exchangeRateValue && parseFloat(exchangeRateValue) > 0 ? (1 / parseFloat(exchangeRateValue)) : undefined}
                 tripType={trip.type}
+                selectedCotationId={selectedCotationId}
+                conditionLabels={(() => {
+                  const selections = activeTarificationCotation.condition_selections || {};
+                  const labels: { name: string; value: string }[] = [];
+                  const activeConditions = tarificationConditions.filter(tc => tc.is_active);
+
+                  if (Object.keys(selections).length > 0) {
+                    // Cotation has explicit condition_selections
+                    Object.entries(selections).forEach(([condIdStr, optionId]) => {
+                      const tc = tarificationConditions.find(c => c.condition_id === Number(condIdStr));
+                      if (tc) {
+                        const opt = tc.options?.find(o => o.id === optionId);
+                        if (opt) labels.push({ name: tc.condition_name, value: opt.label });
+                      }
+                    });
+                  } else {
+                    // Fallback: use trip-level default selections (same logic as CotationConditionsEditor)
+                    activeConditions.forEach(tc => {
+                      const optionId = tc.selected_option_id;
+                      if (optionId) {
+                        const opt = tc.options?.find(o => o.id === optionId);
+                        if (opt) labels.push({ name: tc.condition_name, value: opt.label });
+                      }
+                    });
+                  }
+                  return labels;
+                })()}
                 onSaved={() => refetchTarificationCotations()}
               />
             ) : null}
@@ -2352,18 +2408,6 @@ export default function CircuitDetailPage() {
         tripName={trip.name}
         paxCount={trip.pax_configs?.[0]?.total_pax || undefined}
         onCreated={() => setShowPreBookingDialog(false)}
-      />
-
-      {/* Select for Dossier Dialog */}
-      <SelectCircuitDialog
-        open={showSelectForDossier}
-        onOpenChange={setShowSelectForDossier}
-        trips={[trip]}
-        preSelectedTripId={trip.id}
-        onSuccess={() => {
-          setShowSelectForDossier(false);
-          refetch();
-        }}
       />
 
       {/* Translation Modal */}

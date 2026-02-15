@@ -4,7 +4,7 @@ import { useState, useCallback } from 'react';
 import {
   Plus, Calculator, Trash2, Play, AlertTriangle,
   Loader2, RefreshCw, Settings, ChevronDown, ChevronRight,
-  Pencil,
+  Pencil, Eye,
 } from 'lucide-react';
 import { useCotations } from '@/hooks/useCotations';
 import { useTripConditions } from '@/hooks/useConditions';
@@ -19,9 +19,10 @@ interface CotationsTabProps {
   tripType?: TripType;
   tripRoomDemand?: RoomDemandEntry[];
   tripPaxConfigs?: TripPaxConfig[];
+  selectedCotationId?: number | null;
 }
 
-export default function CotationsTab({ tripId, tripType, tripRoomDemand, tripPaxConfigs }: CotationsTabProps) {
+export default function CotationsTab({ tripId, tripType, tripRoomDemand, tripPaxConfigs, selectedCotationId }: CotationsTabProps) {
   const {
     cotations,
     isLoading,
@@ -139,27 +140,47 @@ export default function CotationsTab({ tripId, tripType, tripRoomDemand, tripPax
     <div className="space-y-6">
       {/* Cotation tabs bar */}
       <div className="flex items-center gap-2 flex-wrap">
-        {cotations.map(cotation => (
-          <button
-            key={cotation.id}
-            onClick={() => setActiveCotationId(cotation.id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all ${
-              activeCotation?.id === cotation.id
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            <span>{cotation.name}</span>
-            {cotation.status === 'calculated' && (
-              <span className={`w-2 h-2 rounded-full ${
-                activeCotation?.id === cotation.id ? 'bg-primary-foreground/30' : 'bg-primary'
-              }`} />
-            )}
-            {cotation.status === 'error' && (
-              <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
-            )}
-          </button>
-        ))}
+        {cotations.map(cotation => {
+          const isCotSelected = selectedCotationId != null && cotation.id === selectedCotationId;
+          const isActive = activeCotation?.id === cotation.id;
+          return (
+            <button
+              key={cotation.id}
+              onClick={() => setActiveCotationId(cotation.id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all ${
+                isActive
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              <span>{cotation.name}</span>
+              {isCotSelected && (
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                  isActive
+                    ? 'bg-emerald-400/30 text-white'
+                    : 'bg-emerald-100 text-emerald-700'
+                }`}>
+                  Retenue
+                </span>
+              )}
+              {cotation.is_published_client && (
+                <span title="Publié côté client">
+                  <Eye className={`w-3.5 h-3.5 ${
+                    isActive ? 'text-primary-foreground/70' : 'text-primary/60'
+                  }`} />
+                </span>
+              )}
+              {cotation.status === 'calculated' && (
+                <span className={`w-2 h-2 rounded-full ${
+                  isActive ? 'bg-primary-foreground/30' : 'bg-primary'
+                }`} />
+              )}
+              {cotation.status === 'error' && (
+                <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+              )}
+            </button>
+          );
+        })}
 
         <button
           onClick={() => setShowCreateDialog(true)}
@@ -180,6 +201,25 @@ export default function CotationsTab({ tripId, tripType, tripRoomDemand, tripPax
           </button>
         )}
       </div>
+
+      {/* Published options summary banner */}
+      {(() => {
+        const publishedCount = cotations.filter(c => c.is_published_client).length;
+        if (publishedCount === 0) return null;
+        const publishedNames = cotations
+          .filter(c => c.is_published_client)
+          .map(c => c.client_label || c.name)
+          .join(', ');
+        return (
+          <div className="flex items-center gap-2 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg">
+            <Eye className="w-4 h-4 text-primary flex-shrink-0" />
+            <span className="text-xs text-primary font-medium">
+              {publishedCount} option{publishedCount > 1 ? 's' : ''} publiée{publishedCount > 1 ? 's' : ''} côté client
+            </span>
+            <span className="text-xs text-gray-500">— {publishedNames}</span>
+          </div>
+        );
+      })()}
 
       {/* No cotations state */}
       {cotations.length === 0 && (

@@ -442,6 +442,7 @@ export default function DossierDetailPage() {
                 clientEmail={leadParticipant?.email || (dossier as any).client_email || null}
                 sourceCircuitId={dossier.source_circuit_id}
                 linkedTrips={linkedTrips}
+                selectedCotationId={(dossier as any).selected_cotation_id ?? null}
                 onTripCreated={refetchLinkedTrips}
                 onSelectionRequested={(tripId) => {
                   setPreSelectedTripId(tripId)

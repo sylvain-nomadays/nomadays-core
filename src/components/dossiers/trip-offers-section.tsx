@@ -70,6 +70,7 @@ interface TripOffersSectionProps {
   clientEmail?: string | null
   sourceCircuitId?: string | null
   linkedTrips: Trip[]
+  selectedCotationId?: number | null
   onTripCreated?: () => void
   onSelectionRequested?: (preSelectedTripId?: number) => void
   onDeselected?: () => void
@@ -99,6 +100,7 @@ export function TripOffersSection({
   clientEmail,
   sourceCircuitId,
   linkedTrips,
+  selectedCotationId,
   onTripCreated,
   onSelectionRequested,
   onDeselected,
@@ -464,23 +466,41 @@ export function TripOffersSection({
                     {/* Cotations / Tarification */}
                     {cotations.length > 0 && (
                       <div className="flex flex-wrap gap-2">
-                        {cotations.map((cot) => (
-                          <div
-                            key={cot.id}
-                            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-gray-50 border border-gray-200 text-xs"
-                          >
-                            <Tag className="h-3 w-3 text-gray-400" />
-                            <span className="font-medium text-gray-700">{cot.name}</span>
-                            {cot.tarification_mode && (
-                              <span className="text-gray-400">
-                                · {TARIFICATION_MODE_LABELS[cot.tarification_mode] || cot.tarification_mode}
+                        {cotations.map((cot) => {
+                          const isCotationSelected = selectedCotationId != null && cot.id === selectedCotationId
+                          return (
+                            <div
+                              key={cot.id}
+                              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs ${
+                                isCotationSelected
+                                  ? 'bg-[#E6F9FA] border border-[#0FB6BC]/40'
+                                  : 'bg-gray-50 border border-gray-200'
+                              }`}
+                            >
+                              {isCotationSelected ? (
+                                <CheckCircle className="h-3 w-3 text-[#0FB6BC]" />
+                              ) : (
+                                <Tag className="h-3 w-3 text-gray-400" />
+                              )}
+                              <span className={`font-medium ${isCotationSelected ? 'text-[#0FB6BC]' : 'text-gray-700'}`}>
+                                {cot.name}
                               </span>
-                            )}
-                            {cot.price_label && (
-                              <span className="font-semibold text-[#0FB6BC]">{cot.price_label}</span>
-                            )}
-                          </div>
-                        ))}
+                              {isCotationSelected && (
+                                <span className="text-[10px] font-bold text-[#0FB6BC]">Retenue</span>
+                              )}
+                              {cot.tarification_mode && !isCotationSelected && (
+                                <span className="text-gray-400">
+                                  · {TARIFICATION_MODE_LABELS[cot.tarification_mode] || cot.tarification_mode}
+                                </span>
+                              )}
+                              {cot.price_label && (
+                                <span className={`font-semibold ${isCotationSelected ? 'text-[#0FB6BC]' : 'text-[#0FB6BC]'}`}>
+                                  {cot.price_label}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     )}
                   </div>

@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   DollarSign, Save, Loader2, Calculator, Plus, Trash2,
   TrendingUp, ArrowRight, AlertTriangle, Info, Users,
-  CalendarClock, X,
+  CalendarClock, X, Eye, EyeOff, CheckCircle2,
 } from 'lucide-react';
+import { apiClient } from '@/lib/api/client';
 import { useTarification } from '@/hooks/useTarification';
 import type {
   TripCotation,
@@ -21,6 +22,7 @@ import type {
   TarificationComputeResult,
   TarificationComputedLine,
   CotationPaxResult,
+  CotationSupplement,
 } from '@/lib/api/types';
 
 // ============================================================================
@@ -33,6 +35,8 @@ interface TarificationPanelProps {
   localCurrency?: string;
   exchangeRate?: number; // 1 localCurrency = X baseCurrency (engine format)
   tripType?: TripType;
+  selectedCotationId?: number | null;
+  conditionLabels?: { name: string; value: string }[];
   onSaved?: () => void;
 }
 
@@ -954,10 +958,258 @@ function MarginSummaryBlock({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ClientPublicationSection — toggle publication + label + description + supplements
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ClientPublicationSectionProps {
+  cotation: TripCotation;
+  currency: string;
+  selectedCotationId?: number | null;
+  onSaved?: () => void;
+}
+
+function ClientPublicationSection({ cotation, currency, selectedCotationId, onSaved }: ClientPublicationSectionProps) {
+  const [isPublished, setIsPublished] = useState(cotation.is_published_client ?? false);
+  const [clientLabel, setClientLabel] = useState(cotation.client_label || cotation.name || '');
+  const [clientDescription, setClientDescription] = useState(cotation.client_description || '');
+  const [supplements, setSupplements] = useState<CotationSupplement[]>(
+    cotation.supplements_json || []
+  );
+  const [pubSaving, setPubSaving] = useState(false);
+  const [pubHasChanges, setPubHasChanges] = useState(false);
+
+  // Resync when cotation changes externally
+  useEffect(() => {
+    setIsPublished(cotation.is_published_client ?? false);
+    setClientLabel(cotation.client_label || cotation.name || '');
+    setClientDescription(cotation.client_description || '');
+    setSupplements(cotation.supplements_json || []);
+    setPubHasChanges(false);
+  }, [cotation.id, cotation.is_published_client, cotation.client_label, cotation.client_description, cotation.supplements_json, cotation.name]);
+
+  // Save publication fields via PATCH /cotations/{id}
+  const savePublication = useCallback(async (overrides?: {
+    is_published_client?: boolean;
+    client_label?: string;
+    client_description?: string;
+    supplements_json?: CotationSupplement[];
+  }) => {
+    setPubSaving(true);
+    try {
+      await apiClient.patch(`/cotations/${cotation.id}`, {
+        is_published_client: overrides?.is_published_client ?? isPublished,
+        client_label: (overrides?.client_label ?? clientLabel) || null,
+        client_description: (overrides?.client_description ?? clientDescription) || null,
+        supplements_json: (overrides?.supplements_json ?? supplements).length > 0
+          ? (overrides?.supplements_json ?? supplements)
+          : null,
+      });
+      setPubHasChanges(false);
+      onSaved?.();
+    } catch (err) {
+      console.error('[ClientPublicationSection] Save error:', err);
+    } finally {
+      setPubSaving(false);
+    }
+  }, [cotation.id, isPublished, clientLabel, clientDescription, supplements, onSaved]);
+
+  // Auto-save debounce (1500ms) for text changes
+  useEffect(() => {
+    if (!pubHasChanges) return;
+    const timer = setTimeout(() => {
+      savePublication();
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [pubHasChanges, clientLabel, clientDescription, supplements, savePublication]);
+
+  // Toggle published — save immediately
+  const handleTogglePublish = useCallback(() => {
+    const next = !isPublished;
+    setIsPublished(next);
+    savePublication({ is_published_client: next });
+  }, [isPublished, savePublication]);
+
+  // Supplement helpers
+  const addSupplement = () => {
+    const updated = [...supplements, { label: '', price: 0, per_person: true }];
+    setSupplements(updated);
+    setPubHasChanges(true);
+  };
+
+  const updateSupplement = (idx: number, field: keyof CotationSupplement, value: string | number | boolean) => {
+    const updated = supplements.map((s, i) =>
+      i === idx ? { ...s, [field]: value } : s
+    );
+    setSupplements(updated);
+    setPubHasChanges(true);
+  };
+
+  const removeSupplement = (idx: number) => {
+    const updated = supplements.filter((_, i) => i !== idx);
+    setSupplements(updated);
+    setPubHasChanges(true);
+  };
+
+  return (
+    <div className="border-t-2 border-primary/20 mt-6 pt-5">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Eye className="w-4 h-4 text-primary" />
+          <h4 className="text-sm font-display font-semibold text-gray-700">Publication client</h4>
+        </div>
+        <div className="flex items-center gap-2">
+          {pubSaving && (
+            <span className="flex items-center gap-1 text-xs text-gray-400">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Sauvegarde...
+            </span>
+          )}
+          {!pubSaving && !pubHasChanges && isPublished && (
+            <span className="flex items-center gap-1 text-xs text-gray-400">
+              <Save className="w-3 h-3" />
+              Sauvegardé
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Selected cotation banner */}
+      {selectedCotationId != null && cotation.id === selectedCotationId && (
+        <div className="flex items-center gap-2 px-3 py-2 mb-4 rounded-lg bg-emerald-50 border border-emerald-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+          <span className="text-xs font-semibold text-emerald-700">Option retenue par le client</span>
+        </div>
+      )}
+
+      {/* Toggle publish */}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="text-sm font-medium text-gray-700">Visible dans l&apos;espace voyageur</div>
+          <div className="text-xs text-gray-400 mt-0.5">
+            Le client verra cette option tarifaire dans sa proposition
+          </div>
+        </div>
+        <button
+          onClick={handleTogglePublish}
+          className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${
+            isPublished ? 'bg-primary' : 'bg-gray-200'
+          }`}
+        >
+          <span
+            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+              isPublished ? 'translate-x-5' : 'translate-x-0'
+            }`}
+          />
+        </button>
+      </div>
+
+      {/* Publication details — show when published */}
+      {isPublished && (
+        <div className="space-y-4 bg-primary/5 rounded-lg p-4">
+          {/* Client label */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Nom affiché au client
+            </label>
+            <input
+              type="text"
+              value={clientLabel}
+              onChange={(e) => { setClientLabel(e.target.value); setPubHasChanges(true); }}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder="Ex : Classique, Deluxe, Budget..."
+              maxLength={100}
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Laissez vide pour utiliser le nom de la cotation : « {cotation.name} »
+            </p>
+          </div>
+
+          {/* Client description */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Description pour le client
+            </label>
+            <textarea
+              value={clientDescription}
+              onChange={(e) => { setClientDescription(e.target.value); setPubHasChanges(true); }}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+              rows={3}
+              placeholder="Expliquez les particularités de cette option (hébergements, niveau de confort, inclusions spéciales...)"
+            />
+          </div>
+
+          {/* Supplements */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-2">
+              Suppléments optionnels
+            </label>
+            {supplements.length > 0 && (
+              <div className="space-y-2 mb-2">
+                <div className="grid grid-cols-[1fr_100px_80px_32px] gap-2 text-xs text-gray-500 font-medium px-1">
+                  <span>Libellé</span>
+                  <span>Prix ({currency})</span>
+                  <span className="text-center">/pers</span>
+                  <span />
+                </div>
+                {supplements.map((sup, idx) => (
+                  <div key={idx} className="grid grid-cols-[1fr_100px_80px_32px] gap-2 items-center">
+                    <input
+                      type="text"
+                      value={sup.label}
+                      onChange={(e) => updateSupplement(idx, 'label', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                      placeholder="Guide francophone"
+                    />
+                    <input
+                      type="number"
+                      value={sup.price || ''}
+                      onChange={(e) => updateSupplement(idx, 'price', parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                      placeholder="0"
+                    />
+                    <div className="flex justify-center">
+                      <button
+                        onClick={() => updateSupplement(idx, 'per_person', !sup.per_person)}
+                        className={`px-2 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                          sup.per_person
+                            ? 'bg-primary/20 text-primary'
+                            : 'bg-gray-100 text-gray-500'
+                        }`}
+                        title={sup.per_person ? 'Prix par personne' : 'Prix forfaitaire'}
+                      >
+                        {sup.per_person ? '/pers' : 'forfait'}
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => removeSupplement(idx)}
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              onClick={addSupplement}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-primary hover:bg-primary/10 rounded-lg transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Ajouter un supplément
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main TarificationPanel component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function TarificationPanel({ cotation, currency, localCurrency, exchangeRate, tripType, onSaved }: TarificationPanelProps) {
+export default function TarificationPanel({ cotation, currency, localCurrency, exchangeRate, tripType, selectedCotationId, conditionLabels, onSaved }: TarificationPanelProps) {
   const { save, saving, compute, computing, computeResult } = useTarification();
 
   // Local state
@@ -1116,18 +1368,7 @@ export default function TarificationPanel({ cotation, currency, localCurrency, e
       ? (displayResult.lines.length === 1 ? displayResult.lines[0] : displayResult.totals)
       : null;
 
-  // No results yet
-  if (!cotation.results_json) {
-    return (
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
-        <AlertTriangle className="w-8 h-8 text-secondary/70 mx-auto mb-3" />
-        <h3 className="text-sm font-display font-semibold text-gray-700 mb-1">Cotation non calculée</h3>
-        <p className="text-xs text-gray-500">
-          Lancez d&apos;abord le calcul de la cotation « {cotation.name} » pour pouvoir saisir la tarification.
-        </p>
-      </div>
-    );
-  }
+  const hasResults = !!cotation.results_json;
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -1152,6 +1393,21 @@ export default function TarificationPanel({ cotation, currency, localCurrency, e
           )}
         </div>
       </div>
+
+      {/* Condition labels — read-only summary of cotation conditions */}
+      {conditionLabels && conditionLabels.length > 0 && (
+        <div className="mx-4 mt-3 flex flex-wrap items-center gap-2">
+          {conditionLabels.map((cond, idx) => (
+            <div
+              key={idx}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-gray-50 border border-gray-200 text-gray-600"
+            >
+              <span className="text-gray-400">{cond.name} :</span>
+              <span className="font-medium text-gray-700">{cond.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Validity date alert banner */}
       {(() => {
@@ -1234,12 +1490,23 @@ export default function TarificationPanel({ cotation, currency, localCurrency, e
           </div>
         </div>
 
+        {/* Info banner when cotation not calculated */}
+        {!hasResults && (
+          <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50 border border-amber-200">
+            <Info className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+            <div className="text-xs text-amber-700">
+              <span className="font-semibold">Cotation non calculée</span> — Vous pouvez saisir les prix de vente ci-dessous.
+              {' '}Le calcul des marges ne sera disponible qu&apos;après avoir lancé la cotation dans l&apos;onglet « Cotations ».
+            </div>
+          </div>
+        )}
+
         {/* 2-column layout: editor (left) + hero card (right) — or full-width if right column hidden */}
-        <div className={`grid ${showRightColumn ? 'grid-cols-12' : 'grid-cols-1'} gap-6`}>
+        <div className={`grid ${showRightColumn && hasResults ? 'grid-cols-12' : 'grid-cols-1'} gap-6`}>
           {/* Left column — editor + results table */}
-          <div className={`${showRightColumn ? 'col-span-7' : ''} space-y-4`}>
-            {/* PaxGroupSwitcher — only in range_web mode */}
-            {isRange && paxValues.length > 0 && (
+          <div className={`${showRightColumn && hasResults ? 'col-span-7' : ''} space-y-4`}>
+            {/* PaxGroupSwitcher — only in range_web mode when results available */}
+            {hasResults && isRange && paxValues.length > 0 && (
               <PaxGroupSwitcher
                 paxValues={paxValues}
                 selectedPax={selectedPaxValue}
@@ -1293,55 +1560,59 @@ export default function TarificationPanel({ cotation, currency, localCurrency, e
               )}
             </div>
 
-            {/* Compute button (manual trigger) */}
-            <div className="flex items-center justify-between">
-              <button
-                onClick={handleCompute}
-                disabled={computing || entries.length === 0}
-                className="flex items-center gap-2 px-4 py-2 text-sm text-primary bg-primary/10 hover:bg-primary/15 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {computing
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : <Calculator className="w-4 h-4" />
-                }
-                Calculer les marges
-              </button>
-              {computing && (
-                <span className="text-xs text-gray-400">Calcul en cours...</span>
-              )}
-            </div>
-
-            {/* Results table */}
-            {displayResult && displayResult.lines.length > 0 && (
-              <div>
-                <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
-                  {isRange ? 'Analyse par scénario' : 'Détail par ligne'}
-                </h4>
-                {isRange && (
-                  <p className="text-xs text-gray-400 mb-2">
-                    Cliquez sur un scénario pour voir le détail de la marge
-                  </p>
-                )}
-                <MarginResultsTable
-                  result={displayResult}
-                  currency={currency}
-                  isRangeMode={isRange}
-                  selectedLineIdx={activeIdx}
-                  onLineSelect={isRange ? (idx: number) => {
-                    setSelectedLineIdx(idx);
-                    // Sync pax switcher
-                    const line = displayResult.lines[idx];
-                    if (line && (line.paying_pax || line.pax)) {
-                      setSelectedPaxValue(line.paying_pax || line.pax || null);
+            {/* Compute button + results — only when cotation has been calculated */}
+            {hasResults && (
+              <>
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={handleCompute}
+                    disabled={computing || entries.length === 0}
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-primary bg-primary/10 hover:bg-primary/15 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {computing
+                      ? <Loader2 className="w-4 h-4 animate-spin" />
+                      : <Calculator className="w-4 h-4" />
                     }
-                  } : undefined}
-                />
-              </div>
+                    Calculer les marges
+                  </button>
+                  {computing && (
+                    <span className="text-xs text-gray-400">Calcul en cours...</span>
+                  )}
+                </div>
+
+                {/* Results table */}
+                {displayResult && displayResult.lines.length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                      {isRange ? 'Analyse par scénario' : 'Détail par ligne'}
+                    </h4>
+                    {isRange && (
+                      <p className="text-xs text-gray-400 mb-2">
+                        Cliquez sur un scénario pour voir le détail de la marge
+                      </p>
+                    )}
+                    <MarginResultsTable
+                      result={displayResult}
+                      currency={currency}
+                      isRangeMode={isRange}
+                      selectedLineIdx={activeIdx}
+                      onLineSelect={isRange ? (idx: number) => {
+                        setSelectedLineIdx(idx);
+                        // Sync pax switcher
+                        const line = displayResult.lines[idx];
+                        if (line && (line.paying_pax || line.pax)) {
+                          setSelectedPaxValue(line.paying_pax || line.pax || null);
+                        }
+                      } : undefined}
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
 
-          {/* Right column — hero price + summary (hidden in range_web for online/custom/template) */}
-          {showRightColumn && (
+          {/* Right column — hero price + summary (only when results available) */}
+          {showRightColumn && hasResults && (
             <div className="col-span-5 space-y-4">
               <PriceHeroCard
                 line={heroLine ?? null}
@@ -1383,6 +1654,16 @@ export default function TarificationPanel({ cotation, currency, localCurrency, e
             </div>
           )}
         </div>
+
+        {/* Client Publication Section — visible when tarification has entries */}
+        {entries.length > 0 && (
+          <ClientPublicationSection
+            cotation={cotation}
+            currency={currency}
+            selectedCotationId={selectedCotationId}
+            onSaved={onSaved}
+          />
+        )}
       </div>
     </div>
   );

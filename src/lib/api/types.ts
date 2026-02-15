@@ -3213,6 +3213,12 @@ export interface CotationResults {
   missing_exchange_rates: string[];
 }
 
+export interface CotationSupplement {
+  label: string;
+  price: number;
+  per_person: boolean;
+}
+
 export interface TripCotation {
   id: number;
   trip_id: number;
@@ -3226,6 +3232,11 @@ export interface TripCotation {
   room_demand_override?: RoomDemandEntry[] | null;
   results_json?: CotationResults | null;
   tarification_json?: TarificationData | null;
+  // Client publication fields
+  is_published_client: boolean;
+  client_label?: string | null;
+  client_description?: string | null;
+  supplements_json?: CotationSupplement[] | null;
   status: CotationStatus;
   calculated_at?: string | null;
   created_at: string;
@@ -3331,6 +3342,11 @@ export interface UpdateCotationDTO {
   pax_configs_json?: CotationPaxConfig[];
   sort_order?: number;
   room_demand_override?: RoomDemandEntry[];
+  // Client publication fields
+  is_published_client?: boolean;
+  client_label?: string | null;
+  client_description?: string | null;
+  supplements_json?: CotationSupplement[] | null;
 }
 
 // ============================================================================
