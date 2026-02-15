@@ -12,6 +12,7 @@ import {
   Loader2,
   User,
   Building2,
+  Globe,
   ChevronDown,
   Check,
   CheckCheck,
@@ -70,6 +71,7 @@ function isGroupedWithPrev(messages: Message[], index: number): boolean {
   const prev = messages[index - 1]
   if (!curr || !prev) return false
   if (curr.direction !== prev.direction) return false
+  if (curr.sender_type !== prev.sender_type) return false
   if (curr.sender_email !== prev.sender_email) return false
   const diffMs = new Date(curr.created_at).getTime() - new Date(prev.created_at).getTime()
   return diffMs < 5 * 60 * 1000
@@ -320,6 +322,7 @@ export function ClientMessagingSection({
           <div className="space-y-1 py-4">
             {messages.map((message, index) => {
               const isFromClient = message.direction === 'inbound'
+              const isSupport = message.sender_type === 'support'
               const isGrouped = isGroupedWithPrev(messages, index)
 
               return (
@@ -339,11 +342,17 @@ export function ClientMessagingSection({
                     <div
                       className="h-7 w-7 rounded-full flex items-center justify-center flex-shrink-0 mt-1"
                       style={{
-                        backgroundColor: isFromClient ? theme.primary : '#f3f4f6',
+                        backgroundColor: isFromClient
+                          ? theme.primary
+                          : isSupport
+                            ? '#DD9371'
+                            : '#f3f4f6',
                       }}
                     >
                       {isFromClient ? (
                         <User className="h-3.5 w-3.5 text-white" />
+                      ) : isSupport ? (
+                        <Globe className="h-3.5 w-3.5 text-white" />
                       ) : (
                         <Building2 className="h-3.5 w-3.5 text-gray-500" />
                       )}
@@ -367,8 +376,17 @@ export function ClientMessagingSection({
                           'text-xs font-medium',
                           isFromClient ? 'text-white/90' : 'text-gray-700'
                         )}>
-                          {isFromClient ? 'Vous' : message.sender_name || advisorName}
+                          {isFromClient
+                            ? 'Vous'
+                            : isSupport
+                              ? (message.sender_name || 'Nomadays')
+                              : (message.sender_name || advisorName)}
                         </span>
+                        {!isFromClient && (
+                          <span className="text-[10px] text-gray-400">
+                            · {isSupport ? 'Nomadays' : 'Votre hôte'}
+                          </span>
+                        )}
                         <span className={cn(
                           'text-xs',
                           isFromClient ? 'text-white/60' : 'text-gray-400'

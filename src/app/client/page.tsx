@@ -13,9 +13,10 @@ import { WishlistCard } from '@/components/client/dashboard/wishlist-card'
 import { FidelityBar } from '@/components/client/dashboard/fidelity-bar'
 import type { FidelityTierDef } from '@/components/client/dashboard/fidelity-bar'
 import { resolveSnippetValues, resolveSnippetsByCategory } from '@/lib/cms/resolve-snippets'
-import { HeartStraight } from '@phosphor-icons/react/dist/ssr'
+import { HeartStraight, AirplaneTilt, ClockCounterClockwise } from '@phosphor-icons/react/dist/ssr'
 import { getCountryCentroid } from '@/lib/constants/country-centroids'
 import { getCountryDefaultPhoto } from '@/lib/constants/country-photos'
+import { getCmsImageUrls } from '@/lib/actions/cms-images'
 
 // Country code → flag emoji lookup
 function countryFlag(code: string): string {
@@ -144,64 +145,31 @@ export default async function ClientHomePage() {
     }
   }
 
-  // Dossiers actifs (non perdus)
-  const activeDossiers = dossiers.filter((d: any) => d.status !== 'lost')
-
-  // Fetch hero photos for each active dossier
-  const dossiersWithPhotos = await Promise.all(
-    activeDossiers.map(async (dossier: any) => {
-      const { data: tripData } = await supabase
-        .from('trips' as any)
-        .select('id, name, status')
-        .eq('dossier_id', dossier.id)
-        .order('created_at', { ascending: false })
-        .limit(1) as { data: any[] | null }
-
-      const trip = tripData?.[0]
-      let heroPhotoUrl: string | null = null
-
-      if (trip) {
-        const { data: photos } = await supabase
-          .from('trip_photos' as any)
-          .select('url_hero, url_medium, url_large, is_hero')
-          .eq('trip_id', trip.id)
-          .order('sort_order', { ascending: true })
-          .limit(3) as { data: any[] | null }
-
-        const heroPhoto = photos?.find((p: any) => p.is_hero) ?? photos?.[0]
-        heroPhotoUrl = heroPhoto?.url_hero ?? heroPhoto?.url_large ?? heroPhoto?.url_medium ?? null
-      }
-
-      const advisor = advisorMap[dossier.assigned_to_id]
-      const hostName = advisor ? `${advisor.first_name || ''} ${advisor.last_name || ''}`.trim() : null
-      const totalTravelers = (dossier.adults_count || 0) + (dossier.children_count || 0)
-
-      // Fallback to default country photo if no trip photo available
-      const finalHeroPhotoUrl = heroPhotoUrl || getCountryDefaultPhoto(dossier.destination_country)
-
-      return { ...dossier, heroPhotoUrl: finalHeroPhotoUrl, totalTravelers, hostName }
-    })
+  // Dossiers actifs (non perdus, non annulés, non archivés)
+  const activeDossiers = dossiers.filter((d: any) =>
+    d.status !== 'lost' && d.status !== 'cancelled' && d.status !== 'archived'
   )
 
-  // Prochain voyage (date future)
-  const now = new Date()
-  const upcomingTrip = dossiersWithPhotos.find((d: any) =>
-    d.travel_date_start && new Date(d.travel_date_start) > now
-  )
+  // Count dossiers for fidelity — only those with deposit paid or beyond (not cancelled)
+  const FIDELITY_STATUSES = new Set(['deposit_paid', 'fully_paid', 'in_trip', 'completed'])
+  const totalWonTrips = dossiers.filter((d: any) => FIDELITY_STATUSES.has(d.status)).length
 
-  const continentTheme = getContinentTheme(upcomingTrip?.destination_country ?? activeDossiers[0]?.destination_country)
-
-  // Count won dossiers for fidelity
-  const totalWonTrips = dossiers.filter((d: any) => d.status === 'won' || d.status === 'confirmed').length
-
-  // Fetch CMS snippets for welcome + fidelity
+  // ── Fetch CMS snippets for welcome + fidelity + images ──
+  // IMPORTANT: Must be fetched BEFORE dossiersWithPhotos so cmsHeroDestinationUrl
+  // is available in the photo fallback cascade.
   let welcomeTexts: WelcomeTexts | undefined
   let fidelityTiers: FidelityTierDef[] | undefined
+  let cmsHeroDestinationUrl: string | null = null
   try {
-    const [welcomeValues, fidelitySnippets] = await Promise.all([
-      resolveSnippetValues(['welcome.title_template', 'welcome.subtitle', 'welcome.proverb'], 'fr'),
-      resolveSnippetsByCategory('fidelity', 'fr'),
+    const firstTenantId = tenantIds[0] || null
+    const [welcomeValues, fidelitySnippets, cmsImageUrls] = await Promise.all([
+      resolveSnippetValues(['welcome.title_template', 'welcome.subtitle', 'welcome.proverb'], 'fr', firstTenantId),
+      resolveSnippetsByCategory('fidelity', 'fr', firstTenantId),
+      firstTenantId ? getCmsImageUrls(firstTenantId) : Promise.resolve({} as Record<string, string>),
     ])
+
+    // CMS hero destination image (admin-uploaded)
+    cmsHeroDestinationUrl = cmsImageUrls['images.hero_destination'] || null
 
     // Welcome texts
     if (Object.keys(welcomeValues).length > 0) {
@@ -232,6 +200,63 @@ export default async function ClientHomePage() {
     // welcomeTexts and fidelityTiers stay undefined -> components use defaults
   }
 
+  // Fetch hero photos for each active dossier
+  const dossiersWithPhotos = await Promise.all(
+    activeDossiers.map(async (dossier: any) => {
+      const { data: tripData } = await supabase
+        .from('trips' as any)
+        .select('id, name, status')
+        .eq('dossier_id', dossier.id)
+        .order('created_at', { ascending: false })
+        .limit(1) as { data: any[] | null }
+
+      const trip = tripData?.[0]
+      let heroPhotoUrl: string | null = null
+
+      if (trip) {
+        const { data: photos } = await supabase
+          .from('trip_photos' as any)
+          .select('url_hero, url_medium, url_large, is_hero')
+          .eq('trip_id', trip.id)
+          .order('sort_order', { ascending: true })
+          .limit(3) as { data: any[] | null }
+
+        const heroPhoto = photos?.find((p: any) => p.is_hero) ?? photos?.[0]
+        heroPhotoUrl = heroPhoto?.url_hero ?? heroPhoto?.url_large ?? heroPhoto?.url_medium ?? null
+      }
+
+      const advisor = advisorMap[dossier.assigned_to_id]
+      const hostName = advisor ? `${advisor.first_name || ''} ${advisor.last_name || ''}`.trim() : null
+      const totalTravelers = (dossier.adults_count || 0) + (dossier.children_count || 0)
+
+      // Fallback cascade: CMS admin image (explicit override) → trip photo → default country photo
+      const finalHeroPhotoUrl = cmsHeroDestinationUrl || heroPhotoUrl || getCountryDefaultPhoto(dossier.destination_country)
+
+      return { ...dossier, heroPhotoUrl: finalHeroPhotoUrl, totalTravelers, hostName }
+    })
+  )
+
+  // Prochain voyage (date future) & séparer en cours / passés
+  const now = new Date()
+
+  // Voyages en cours : date de fin dans le futur ou pas de date de fin
+  const currentDossiers = dossiersWithPhotos.filter((d: any) => {
+    if (!d.travel_date_end) return true
+    return new Date(d.travel_date_end) >= now
+  })
+
+  // Voyages passés : date de fin dans le passé
+  const pastDossiers = dossiersWithPhotos.filter((d: any) => {
+    if (!d.travel_date_end) return false
+    return new Date(d.travel_date_end) < now
+  })
+
+  const upcomingTrip = dossiersWithPhotos.find((d: any) =>
+    d.travel_date_start && new Date(d.travel_date_start) > now
+  )
+
+  const continentTheme = getContinentTheme(upcomingTrip?.destination_country ?? activeDossiers[0]?.destination_country)
+
   // Fetch traveler wishlists
   let wishlists: any[] = []
   try {
@@ -245,30 +270,45 @@ export default async function ClientHomePage() {
     // Table may not exist yet if migration hasn't been applied
   }
 
-  // Fetch declared past trips
+  // Fetch declared past trips (via RPC to bypass PostgREST schema cache)
   let pastTrips: any[] = []
   try {
-    const { data: pastData } = await (supabase
-      .from('traveler_past_trips' as any))
-      .select('*')
-      .eq('participant_id', participant.id)
-      .order('created_at', { ascending: false }) as { data: any[] | null }
-    pastTrips = pastData || []
+    const { data: pastData } = await (supabase.rpc as any)('get_past_trips', {
+      p_participant_id: participant.id,
+    })
+    pastTrips = Array.isArray(pastData) ? pastData : []
   } catch {
-    // Table may not exist yet
+    // Function may not exist yet
   }
 
   // Build map destinations from dossiers
+  const CONFIRMED_MAP_STATUSES = new Set(['deposit_paid', 'fully_paid', 'in_trip', 'completed'])
+  const OPTION_MAP_STATUSES = new Set(['won', 'confirmed'])
+  const IN_PROGRESS_MAP_STATUSES = new Set(['proposal_sent', 'quote_sent', 'negotiation', 'lead', 'qualified'])
   const dossierCountryCodes = new Set<string>()
   const dossierDestinations: MapDestination[] = dossiersWithPhotos
     .filter((d: any) => d.destination_country)
     .map((d: any) => {
       const isUpcoming = d.travel_date_start && new Date(d.travel_date_start) > now
       const isPast = d.travel_date_end && new Date(d.travel_date_end) < now
-      let status: 'visited' | 'nomadays' | 'wishlist' = 'nomadays'
-      if (isPast || d.status === 'won') status = 'visited'
-      if (isUpcoming && (d.status === 'won' || d.status === 'confirmed')) status = 'nomadays'
-      if (d.status === 'proposal_sent' || d.status === 'lead' || d.status === 'qualified') status = 'wishlist'
+
+      // Map status for the globe marker
+      let mapStatus: 'visited' | 'nomadays' | 'wishlist' = 'nomadays'
+      if (isPast) mapStatus = 'visited'
+      if (CONFIRMED_MAP_STATUSES.has(d.status) || OPTION_MAP_STATUSES.has(d.status)) mapStatus = 'nomadays'
+      if (IN_PROGRESS_MAP_STATUSES.has(d.status)) mapStatus = 'wishlist'
+
+      // Subtitle for the sidebar label
+      let titleSuffix = ''
+      if (isUpcoming && CONFIRMED_MAP_STATUSES.has(d.status)) {
+        titleSuffix = ' - Confirmé'
+      } else if (isUpcoming && OPTION_MAP_STATUSES.has(d.status)) {
+        titleSuffix = ' - Option'
+      } else if (isUpcoming && IN_PROGRESS_MAP_STATUSES.has(d.status)) {
+        titleSuffix = ' - En cours'
+      } else if (isPast && d.travel_date_start) {
+        titleSuffix = ` ${new Date(d.travel_date_start).getFullYear()}`
+      }
 
       dossierCountryCodes.add(d.destination_country.toUpperCase())
 
@@ -276,8 +316,8 @@ export default async function ClientHomePage() {
         id: d.id,
         country: countryName(d.destination_country),
         countryCode: d.destination_country,
-        title: `${countryName(d.destination_country)}${isUpcoming ? ' - Confirmé' : isPast ? ` ${new Date(d.travel_date_start).getFullYear()}` : ''}`,
-        status,
+        title: `${countryName(d.destination_country)}${titleSuffix}`,
+        status: mapStatus,
         heroPhotoUrl: d.heroPhotoUrl,
         year: isPast && d.travel_date_start ? `${new Date(d.travel_date_start).getFullYear()}` : undefined,
         type: 'dossier' as const,
@@ -342,7 +382,7 @@ export default async function ClientHomePage() {
       />
 
       {/* Fidelity Bar */}
-      <FidelityBar totalTrips={(totalWonTrips || dossiersWithPhotos.length) + pastTrips.filter((pt: any) => !pt.is_nomadays || pt.is_verified).length} tiers={fidelityTiers} />
+      <FidelityBar totalTrips={totalWonTrips + pastTrips.filter((pt: any) => pt.is_nomadays && pt.is_verified).length} tiers={fidelityTiers} />
 
       {/* Interactive Map */}
       <InteractiveMap
@@ -350,11 +390,22 @@ export default async function ClientHomePage() {
         participantId={participant.id}
       />
 
-      {/* Destinations Grid — Mes voyages */}
+      {/* Destinations Grid — Mes voyages en cours */}
       <div className="px-8 lg:px-10 pb-6 bg-white">
-        {dossiersWithPhotos.length > 0 ? (
+        <div className="flex items-center gap-2.5 mb-4">
+          <AirplaneTilt size={22} weight="duotone" className="text-[#0FB6BC]" />
+          <h3 className="font-display font-bold text-lg text-gray-800">
+            Mes voyages en cours
+          </h3>
+          {currentDossiers.length > 0 && (
+            <span className="text-xs text-gray-400 font-medium bg-gray-100 px-2 py-0.5 rounded-full">
+              {currentDossiers.length}
+            </span>
+          )}
+        </div>
+        {currentDossiers.length > 0 ? (
           <div className="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-            {dossiersWithPhotos.slice(0, 5).map((dossier: any) => (
+            {currentDossiers.slice(0, 5).map((dossier: any) => (
               <DestinationCard
                 key={dossier.id}
                 dossierId={dossier.id}
@@ -382,6 +433,39 @@ export default async function ClientHomePage() {
           </div>
         )}
       </div>
+
+      {/* Past Trips Grid — Mes voyages passés (visible uniquement si des voyages terminés existent) */}
+      {pastDossiers.length > 0 && (
+        <div className="px-8 lg:px-10 pb-6 bg-white">
+          <div className="flex items-center gap-2.5 mb-4">
+            <ClockCounterClockwise size={22} weight="duotone" className="text-[#8BA080]" />
+            <h3 className="font-display font-bold text-lg text-gray-800">
+              Mes voyages passés
+            </h3>
+            <span className="text-xs text-gray-400 font-medium bg-gray-100 px-2 py-0.5 rounded-full">
+              {pastDossiers.length}
+            </span>
+          </div>
+          <div className="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+            {pastDossiers.map((dossier: any) => (
+              <DestinationCard
+                key={dossier.id}
+                dossierId={dossier.id}
+                title={dossier.title}
+                destination={dossier.destination_country ? countryName(dossier.destination_country) : null}
+                travelDateStart={dossier.travel_date_start}
+                travelDateEnd={dossier.travel_date_end}
+                status={dossier.status}
+                heroPhotoUrl={dossier.heroPhotoUrl}
+                tenantName={dossier.tenant?.name}
+                totalTravelers={dossier.totalTravelers}
+                destinationCountryCode={dossier.destination_country}
+                hostName={dossier.hostName}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Wishlist Grid — Mes envies */}
       <div className="px-8 lg:px-10 pb-8 bg-white">

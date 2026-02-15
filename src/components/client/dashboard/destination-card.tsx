@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import Image from 'next/image'
-import { GlobeSimple } from '@phosphor-icons/react/dist/ssr'
+import { GlobeSimple, CalendarBlank, Users } from '@phosphor-icons/react/dist/ssr'
 import { getContinentTheme } from '../continent-theme'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -22,40 +22,62 @@ interface DestinationCardProps {
 // ─── Status badge config ─────────────────────────────────────────────────────
 
 function getStatusBadge(status: string, travelDateStart?: string | null): { label: string; bg: string } {
-  // If upcoming, show "Dans X jours"
-  if (travelDateStart) {
+  // Statuts confirmés (acompte payé ou au-delà)
+  const CONFIRMED_STATUSES = new Set(['deposit_paid', 'fully_paid', 'in_trip', 'completed'])
+
+  // "Dans X jours" — uniquement pour les voyages confirmés (acompte payé+)
+  if (travelDateStart && CONFIRMED_STATUSES.has(status)) {
     const now = new Date()
     const start = new Date(travelDateStart)
     const diffDays = Math.floor((start.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
     if (diffDays > 0 && diffDays <= 90) {
-      return { label: `Dans ${diffDays} jours`, bg: '#D4A847' }
+      return { label: `Dans ${diffDays} jours`, bg: '#8BA080' }
     }
   }
 
   switch (status) {
+    case 'deposit_paid':
+    case 'fully_paid':
+    case 'in_trip':
+    case 'completed':
+      return { label: 'Confirmé', bg: '#8BA080' }
     case 'won':
     case 'confirmed':
-      return { label: 'Confirme', bg: '#8BA080' }
+      return { label: 'Option', bg: '#D4A847' }
     case 'proposal_sent':
+    case 'quote_sent':
     case 'negotiation':
-      return { label: 'Proposition', bg: '#0FB6BC' }
     case 'lead':
     case 'qualified':
       return { label: 'En cours', bg: '#0FB6BC' }
+    case 'cancelled':
+    case 'archived':
+      return { label: 'Annulé', bg: '#636E72' }
     default:
-      return { label: status, bg: '#636E72' }
+      return { label: 'En cours', bg: '#0FB6BC' }
   }
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
+
+function formatDateRange(start?: string | null, end?: string | null): string {
+  if (!start) return ''
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
+  const startStr = new Date(start).toLocaleDateString('fr-FR', opts)
+  if (!end) return startStr
+  const endStr = new Date(end).toLocaleDateString('fr-FR', { ...opts, year: 'numeric' })
+  return `${startStr} — ${endStr}`
+}
 
 export function DestinationCard({
   dossierId,
   title,
   destination,
   travelDateStart,
+  travelDateEnd,
   status,
   heroPhotoUrl,
+  totalTravelers,
   destinationCountryCode,
   hostName,
 }: DestinationCardProps) {
@@ -102,6 +124,24 @@ export function DestinationCard({
           <span className="font-display font-bold text-lg leading-tight">
             {title}
           </span>
+
+          {/* Dates & travelers */}
+          {(travelDateStart || (totalTravelers && totalTravelers > 0)) && (
+            <div className="flex items-center gap-3 text-xs text-white/80 mt-1.5">
+              {travelDateStart && (
+                <span className="flex items-center gap-1">
+                  <CalendarBlank size={12} weight="duotone" />
+                  {formatDateRange(travelDateStart, travelDateEnd)}
+                </span>
+              )}
+              {totalTravelers != null && totalTravelers > 0 && (
+                <span className="flex items-center gap-1">
+                  <Users size={12} weight="duotone" />
+                  {totalTravelers} voyageur{totalTravelers > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Host name */}
           {hostName && (

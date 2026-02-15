@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { HeartStraight } from '@phosphor-icons/react/dist/ssr'
 import { DestinationCard } from '@/components/client/dashboard/destination-card'
+import { getCmsImageUrls } from '@/lib/actions/cms-images'
 
 export default async function ClientVoyagesPage() {
   const supabase = await createClient()
@@ -93,6 +94,18 @@ export default async function ClientVoyagesPage() {
     tenant: tenantMap[d.tenant_id] || null,
   }))
 
+  // Fetch CMS hero image for fallback
+  const firstTenantId = tenantIds[0] || null
+  let cmsHeroDestinationUrl: string | null = null
+  if (firstTenantId) {
+    try {
+      const cmsImageUrls = await getCmsImageUrls(firstTenantId)
+      cmsHeroDestinationUrl = cmsImageUrls['images.hero_destination'] || null
+    } catch {
+      // CMS images not critical
+    }
+  }
+
   // Fetch hero photos for each dossier
   const dossiersWithPhotos = await Promise.all(
     allDossiers.map(async (dossier: any) => {
@@ -119,20 +132,23 @@ export default async function ClientVoyagesPage() {
       }
 
       const totalTravelers = (dossier.adults_count || 0) + (dossier.children_count || 0)
-      return { ...dossier, heroPhotoUrl, totalTravelers }
+      // Fallback cascade: CMS admin image (explicit override) → trip photo → null
+      const finalHeroPhotoUrl = cmsHeroDestinationUrl || heroPhotoUrl
+      return { ...dossier, heroPhotoUrl: finalHeroPhotoUrl, totalTravelers }
     })
   )
 
   // Séparer les voyages actifs et passés
   const now = new Date()
+  const INACTIVE_STATUSES = new Set(['lost', 'cancelled', 'archived'])
   const activeDossiers = dossiersWithPhotos.filter((d: any) => {
-    if (d.status === 'lost') return false
+    if (INACTIVE_STATUSES.has(d.status)) return false
     if (!d.travel_date_end) return true
     return new Date(d.travel_date_end) >= now
   })
 
   const pastDossiers = dossiersWithPhotos.filter((d: any) => {
-    if (d.status === 'lost') return true
+    if (INACTIVE_STATUSES.has(d.status)) return true
     if (!d.travel_date_end) return false
     return new Date(d.travel_date_end) < now
   })

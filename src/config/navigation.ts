@@ -33,6 +33,7 @@ import {
   Palette,
   Mail,
   Calendar,
+  Compass,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -223,6 +224,7 @@ export const navGroupedBySection: Partial<Record<AppSection, SectionNavItems>> =
       items: [
         { href: '/admin/content/client/faq', label: 'FAQ', icon: HelpCircle, section: 'cms' },
         { href: '/admin/content/client/widgets', label: 'Widgets & textes', icon: MessageSquare, section: 'cms' },
+        { href: '/admin/content/client/travel-info', label: 'Carnets pratiques', icon: Compass, section: 'cms' },
         { href: '/admin/content/client/emails', label: 'Emails', icon: Mail, section: 'cms', badge: 'À venir' },
       ],
     },

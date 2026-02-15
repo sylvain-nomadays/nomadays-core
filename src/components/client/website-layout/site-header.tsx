@@ -1,55 +1,68 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useSearchParams } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { useState, Suspense } from 'react'
-import { List, X, Sparkle } from '@phosphor-icons/react/dist/ssr'
-import { Logo } from '@/components/logo'
+import {
+  List, X, Question, Coin, Camera, SignOut, UserCircle, House, GlobeSimple,
+  Binoculars, Compass, MapTrifold, Airplane, GlobeHemisphereWest, Sparkle,
+} from '@phosphor-icons/react/dist/ssr'
 import type { ContinentTheme } from '../continent-theme'
+
+// ─── Fidelity icon mapping ──────────────────────────────────────────────────
+
+const FIDELITY_ICON_MAP: Record<string, React.ComponentType<any>> = {
+  Binoculars,
+  Compass,
+  MapTrifold,
+  Airplane,
+  GlobeHemisphereWest,
+  Sparkle,
+}
+
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 interface SiteHeaderProps {
   displayName: string
   continentTheme: ContinentTheme
-  salonDeTheHref?: string
-  mesVoyagesHref?: string
+  /** Label du tier de fidélité (ex: "Grand Voyageur") */
+  fidelityTierLabel?: string
+  /** Couleur du tier de fidélité (ex: "#DD9371") */
+  fidelityTierColor?: string
+  /** Nom de l'icône Phosphor du tier (ex: "Airplane") */
+  fidelityTierIconName?: string
 }
 
-// ─── Nav item type ───────────────────────────────────────────────────────────
+// ─── Nav items ──────────────────────────────────────────────────────────────
 
 interface NavItem {
   href: string
   label: string
-  /** If set, this nav item is active when pathname starts with this AND tab=messages */
-  isSalonDeThe?: boolean
+  Icon?: React.ComponentType<any>
 }
 
-// ─── Inner component (uses useSearchParams) ──────────────────────────────────
+const mainNavItems: NavItem[] = [
+  { href: '/client', label: 'Accueil', Icon: House },
+  { href: '/client/explorer', label: 'Explorer', Icon: GlobeSimple },
+  { href: '/client/credits', label: 'Crédits Nomadays', Icon: Coin },
+  { href: '/client/souvenirs', label: 'Mes Souvenirs', Icon: Camera },
+  { href: '/client/aide', label: 'Aide', Icon: Question },
+]
 
-function SiteHeaderInner({ displayName, continentTheme, salonDeTheHref, mesVoyagesHref }: SiteHeaderProps) {
-  const navItems: NavItem[] = [
-    { href: '/client', label: 'Accueil' },
-    { href: mesVoyagesHref || '/client/voyages', label: 'Mes voyages' },
-    { href: salonDeTheHref || '/client', label: 'Salon de Thé', isSalonDeThe: true },
-    { href: '/client/aide', label: 'Aide' },
-  ]
+// ─── Inner component ────────────────────────────────────────────────────────
 
+function SiteHeaderInner({
+  displayName,
+  continentTheme,
+  fidelityTierLabel,
+  fidelityTierColor,
+  fidelityTierIconName,
+}: SiteHeaderProps) {
   const pathname = usePathname()
-  const searchParams = useSearchParams()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
-  const currentTab = searchParams.get('tab')
-  const isOnMessagesTab = pathname.startsWith('/client/voyages/') && currentTab === 'messages'
-
   const isActive = (item: NavItem) => {
-    // "Salon de Thé" is active when we're on a voyage page with tab=messages
-    if (item.isSalonDeThe) return isOnMessagesTab
-    // "Mes voyages" is active on voyage pages EXCEPT when on tab=messages
-    if (item.label === 'Mes voyages') {
-      return pathname.startsWith('/client/voyages') && !isOnMessagesTab
-    }
-    // "Accueil" is active only on exact /client
     if (item.href === '/client') return pathname === '/client'
-    // Default: prefix match
     return pathname.startsWith(item.href)
   }
 
@@ -59,6 +72,13 @@ function SiteHeaderInner({ displayName, continentTheme, salonDeTheHref, mesVoyag
     .join('')
     .toUpperCase()
     .slice(0, 2)
+
+  // Resolve fidelity icon
+  const tierColor = fidelityTierColor || '#A3A3A3'
+  const tierLabel = fidelityTierLabel || 'A l\'Horizon'
+  const TierIcon = FIDELITY_ICON_MAP[fidelityTierIconName || 'Binoculars'] || Binoculars
+  // Lighten the tier color for background (10% opacity)
+  const tierBgColor = `${tierColor}18`
 
   return (
     <header className="bg-white sticky top-0 z-[100]" style={{ boxShadow: '0 2px 20px rgba(0,0,0,0.05)' }}>
@@ -80,15 +100,21 @@ function SiteHeaderInner({ displayName, continentTheme, salonDeTheHref, mesVoyag
 
         {/* Desktop nav */}
         <nav className="hidden md:flex items-center gap-8">
-          {navItems.map((item) => (
+          {mainNavItems.map((item) => (
             <Link
               key={item.label}
               href={item.href}
-              className="text-sm font-medium transition-colors"
+              className="flex items-center gap-1.5 text-sm font-medium transition-colors"
               style={{
                 color: isActive(item) ? continentTheme.primary : '#636E72',
               }}
             >
+              {item.Icon && (
+                <item.Icon
+                  size={15}
+                  weight={isActive(item) ? 'fill' : 'duotone'}
+                />
+              )}
               {item.label}
             </Link>
           ))}
@@ -97,10 +123,13 @@ function SiteHeaderInner({ displayName, continentTheme, salonDeTheHref, mesVoyag
         {/* User area */}
         <div className="flex items-center gap-4">
           {/* Fidelity badge - hidden on small screens */}
-          <div className="hidden lg:flex items-center gap-1.5 bg-[#FBF6E9] px-3.5 py-1.5 rounded-full">
-            <Sparkle size={14} weight="duotone" style={{ color: '#D4A847' }} />
-            <span className="text-xs font-semibold" style={{ color: '#D4A847' }}>
-              Grand Voyageur
+          <div
+            className="hidden lg:flex items-center gap-1.5 px-3.5 py-1.5 rounded-full"
+            style={{ backgroundColor: tierBgColor }}
+          >
+            <TierIcon size={14} weight="duotone" style={{ color: tierColor }} />
+            <span className="text-xs font-semibold" style={{ color: tierColor }}>
+              {tierLabel}
             </span>
           </div>
 
@@ -121,9 +150,9 @@ function SiteHeaderInner({ displayName, continentTheme, salonDeTheHref, mesVoyag
             aria-label="Menu"
           >
             {mobileMenuOpen ? (
-              <X size={20} weight="duotone" className="text-gray-700" />
+              <X size={20} weight="bold" className="text-gray-700" />
             ) : (
-              <List size={20} weight="duotone" className="text-gray-700" />
+              <List size={20} weight="bold" className="text-gray-700" />
             )}
           </button>
         </div>
@@ -132,34 +161,53 @@ function SiteHeaderInner({ displayName, continentTheme, salonDeTheHref, mesVoyag
       {/* Mobile menu */}
       {mobileMenuOpen && (
         <nav className="md:hidden border-t border-gray-100 bg-white px-6 py-4 space-y-1">
-          {navItems.map((item) => (
+          {/* Mobile fidelity badge */}
+          <div
+            className="flex items-center gap-2 px-3 py-2 rounded-xl mb-2"
+            style={{ backgroundColor: tierBgColor }}
+          >
+            <TierIcon size={16} weight="duotone" style={{ color: tierColor }} />
+            <span className="text-xs font-semibold" style={{ color: tierColor }}>
+              {tierLabel}
+            </span>
+          </div>
+
+          {mainNavItems.map((item) => (
             <Link
               key={item.label}
               href={item.href}
               onClick={() => setMobileMenuOpen(false)}
-              className="block px-3 py-2.5 rounded-xl text-sm font-medium transition-colors"
+              className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors"
               style={{
                 backgroundColor: isActive(item) ? `${continentTheme.primary}15` : 'transparent',
                 color: isActive(item) ? continentTheme.primary : '#636E72',
               }}
             >
+              {item.Icon && (
+                <item.Icon
+                  size={16}
+                  weight={isActive(item) ? 'fill' : 'duotone'}
+                />
+              )}
               {item.label}
             </Link>
           ))}
-          <div className="pt-2 border-t border-gray-100 mt-2">
+          <div className="pt-2 border-t border-gray-100 mt-2 space-y-1">
             <Link
               href="/client/profil"
               onClick={() => setMobileMenuOpen(false)}
-              className="block px-3 py-2.5 rounded-xl text-sm font-medium text-gray-500"
+              className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-gray-500"
             >
+              <UserCircle size={16} weight="duotone" />
               Mon profil
             </Link>
             <form action="/auth/signout" method="post">
               <button
                 type="submit"
-                className="w-full text-left px-3 py-2.5 rounded-xl text-sm font-medium text-gray-400 hover:text-gray-600"
+                className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-xl text-sm font-medium text-gray-400 hover:text-gray-600"
               >
-                Deconnexion
+                <SignOut size={16} weight="duotone" />
+                Déconnexion
               </button>
             </form>
           </div>

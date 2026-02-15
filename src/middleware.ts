@@ -9,6 +9,7 @@ const PUBLIC_ROUTES = [
   '/forgot-password',
   '/auth/callback',
   '/auth/confirm',
+  '/invitation',
 ]
 
 // Routes accessible only when NOT authenticated

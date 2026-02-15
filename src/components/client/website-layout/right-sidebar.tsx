@@ -94,6 +94,7 @@ interface RightSidebarProps {
   continentTheme: ContinentTheme
   content?: SidebarContent
   proposals?: ProposalMiniCard[]
+  currentDossierId?: string | null
 }
 
 // ─── Proposal Cards (reusable) ───────────────────────────────────────────────
@@ -103,19 +104,26 @@ function ProposalCards({
   continentTheme,
   maxCards = 2,
   layout = 'vertical',
+  excludeDossierId,
 }: {
   proposals: ProposalMiniCard[]
   continentTheme: ContinentTheme
   maxCards?: number
   layout?: 'vertical' | 'horizontal'
+  excludeDossierId?: string | null
 }) {
   if (!proposals || proposals.length === 0) return null
 
   const isHorizontal = layout === 'horizontal'
+  // Filter out the current dossier (no need to link to the page we're already on)
+  const filteredProposals = excludeDossierId
+    ? proposals.filter((p) => p.dossierId !== excludeDossierId)
+    : proposals
+  if (filteredProposals.length === 0) return null
   // Only show the last N proposals (most recent first, already sorted desc by created_at)
-  const visibleProposals = proposals.slice(0, maxCards)
+  const visibleProposals = filteredProposals.slice(0, maxCards)
   // Find the dossierId from the first proposal for the "Voir toutes" button
-  const firstDossierId = proposals[0]?.dossierId
+  const firstDossierId = filteredProposals[0]?.dossierId
 
   return (
     <div>
@@ -131,7 +139,7 @@ function ProposalCards({
         {visibleProposals.map((proposal, idx) => (
           <Link
             key={`${proposal.dossierId}-${idx}`}
-            href={`/client/voyages/${proposal.dossierId}?tab=proposals`}
+            href={`/client/voyages/${proposal.dossierId}?tab=program`}
             className="block rounded-2xl overflow-hidden border border-gray-100 bg-white hover:shadow-md hover:border-gray-200 transition-all group"
           >
             {/* Image — aspect-[4/3] for horizontal, fixed h-[130px] for vertical */}
@@ -186,24 +194,13 @@ function ProposalCards({
         ))}
       </div>
 
-      {/* "Voir toutes mes propositions" button */}
-      {firstDossierId && (
-        <Link
-          href={`/client/voyages/${firstDossierId}?tab=proposals`}
-          className="flex items-center justify-center gap-2 w-full py-3 mt-4 rounded-xl text-sm font-semibold transition-colors hover:opacity-90"
-          style={{ backgroundColor: `${continentTheme.primary}12`, color: continentTheme.primary }}
-        >
-          Voir toutes mes propositions
-          <ArrowRight size={14} weight="bold" />
-        </Link>
-      )}
     </div>
   )
 }
 
 export { ProposalCards }
 
-export function RightSidebar({ continentTheme, content, proposals }: RightSidebarProps) {
+export function RightSidebar({ continentTheme, content, proposals, currentDossierId }: RightSidebarProps) {
   const c = content || DEFAULT_SIDEBAR
 
   return (
@@ -211,7 +208,7 @@ export function RightSidebar({ continentTheme, content, proposals }: RightSideba
 
       {/* ── Proposal Mini-Cards ── */}
       <div className="right-sidebar-proposals">
-        <ProposalCards proposals={proposals || []} continentTheme={continentTheme} />
+        <ProposalCards proposals={proposals || []} continentTheme={continentTheme} excludeDossierId={currentDossierId} />
       </div>
 
       {/* Nomadays Collectif */}

@@ -5,6 +5,7 @@ import { RightSidebar } from '@/components/client/website-layout/right-sidebar'
 import type { SidebarContent, ProposalMiniCard } from '@/components/client/website-layout/right-sidebar'
 import { getContinentTheme, getContinentCssVars } from '@/components/client/continent-theme'
 import { resolveSnippetValues } from '@/lib/cms/resolve-snippets'
+import { getCurrentTier, FIDELITY_STATUSES } from '@/lib/fidelity-tiers'
 
 // ─── Country helpers ──────────────────────────────────────────────────────────
 
@@ -119,6 +120,34 @@ export default async function ClientLayout({
 
   const continentTheme = getContinentTheme(activeDossierCountry)
 
+  // ── Calculate fidelity tier ──
+  let fidelityTrips = 0
+  if (participant && allDossierIds.length > 0) {
+    // Count dossiers with confirmed statuses (deposit_paid+)
+    const { data: allDossiersForFidelity } = await (supabase
+      .from('dossiers') as any)
+      .select('status')
+      .in('id', allDossierIds) as { data: any[] | null }
+
+    fidelityTrips = (allDossiersForFidelity || [])
+      .filter((d: any) => FIDELITY_STATUSES.has(d.status))
+      .length
+
+    // Add verified past Nomadays trips
+    try {
+      const { data: pastTrips } = await (supabase.rpc as any)('get_past_trips', {
+        p_participant_id: participant.id,
+      }) as { data: any[] | null }
+
+      fidelityTrips += (pastTrips || [])
+        .filter((pt: any) => pt.is_nomadays && pt.is_verified)
+        .length
+    } catch {
+      // RPC may not exist yet
+    }
+  }
+  const fidelityTier = getCurrentTier(fidelityTrips)
+
   // ── Fetch proposals (trips) for sidebar mini-cards ──
   let sidebarProposals: ProposalMiniCard[] = []
 
@@ -184,6 +213,18 @@ export default async function ClientLayout({
   }
 
   // Fetch sidebar CMS snippets
+  // Determine tenant_id from the active dossier for CMS resolution
+  let voyageurTenantId: string | null = null
+  if (allDossierIds.length > 0) {
+    const { data: firstDossier } = await (supabase
+      .from('dossiers') as any)
+      .select('tenant_id')
+      .in('id', allDossierIds)
+      .limit(1)
+      .single() as { data: any | null }
+    voyageurTenantId = firstDossier?.tenant_id || null
+  }
+
   let sidebarContent: SidebarContent | undefined
   try {
     const sidebarKeys = [
@@ -194,7 +235,7 @@ export default async function ClientLayout({
       'sidebar.ambassador.title', 'sidebar.ambassador.description', 'sidebar.ambassador.cta_text',
       'sidebar.social.instagram', 'sidebar.social.facebook', 'sidebar.social.youtube',
     ]
-    const sv = await resolveSnippetValues(sidebarKeys, 'fr')
+    const sv = await resolveSnippetValues(sidebarKeys, 'fr', voyageurTenantId)
 
     // Only build sidebarContent if we got some values
     if (Object.keys(sv).length > 0) {
@@ -237,14 +278,15 @@ export default async function ClientLayout({
       <SiteHeader
         displayName={displayName}
         continentTheme={continentTheme}
-        salonDeTheHref={activeDossierId ? `/client/voyages/${activeDossierId}?tab=messages` : '/client'}
-        mesVoyagesHref={activeDossierId ? `/client/voyages/${activeDossierId}` : '/client/voyages'}
+        fidelityTierLabel={fidelityTier.current.label}
+        fidelityTierColor={fidelityTier.current.color}
+        fidelityTierIconName={fidelityTier.current.iconName}
       />
 
       {/* Main layout: content + right sidebar */}
       <div className="voyageur-main-layout">
         <main className="min-h-0">{children}</main>
-        <RightSidebar continentTheme={continentTheme} content={sidebarContent} proposals={sidebarProposals} />
+        <RightSidebar continentTheme={continentTheme} content={sidebarContent} proposals={sidebarProposals} currentDossierId={activeDossierId} />
       </div>
     </div>
   )

@@ -4,15 +4,9 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import {
-  Home,
-  FolderHeart,
-  MessageSquare,
-  User,
-  HelpCircle,
-  LogOut,
-  Compass,
-  Menu,
-} from 'lucide-react';
+  House, ChatCircle, Compass, GlobeSimple, List, SignOut,
+  Question, Coin, Camera, UserCircle,
+} from '@phosphor-icons/react';
 import { Logo } from '@/components/logo';
 import { AdvisorCard } from './advisor-card';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -46,14 +40,16 @@ interface TravelerSidebarProps {
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
 const navItems = [
-  { href: '/client', label: 'Accueil', icon: Home },
-  { href: '/client/voyages', label: 'Mes Voyages', icon: FolderHeart },
-  { href: '/client/messages', label: 'Messages', icon: MessageSquare },
+  { href: '/client', label: 'Accueil', Icon: House },
+  { href: '/client/explorer', label: 'Explorer', Icon: GlobeSimple },
+  { href: '/client/messages', label: 'Messages', Icon: ChatCircle },
 ];
 
 const bottomNavItems = [
-  { href: '/client/profil', label: 'Mon Profil', icon: User },
-  { href: '/client/aide', label: 'Aide', icon: HelpCircle },
+  { href: '/client/credits', label: 'Crédits Nomadays', Icon: Coin },
+  { href: '/client/souvenirs', label: 'Mes Souvenirs', Icon: Camera },
+  { href: '/client/aide', label: 'Aide', Icon: Question },
+  { href: '/client/profil', label: 'Mon Profil', Icon: UserCircle },
 ];
 
 // ─── Sidebar Content (shared between desktop & mobile) ───────────────────────
@@ -82,7 +78,7 @@ function SidebarContent({
         </Link>
         {activeDossier?.tenant?.name && (
           <div className="mt-2 flex items-center gap-2">
-            <Compass className="h-3.5 w-3.5" style={{ color: continentTheme.primary }} />
+            <Compass size={14} weight="duotone" style={{ color: continentTheme.primary }} />
             <span className="text-xs font-medium text-gray-500">
               {activeDossier.tenant.name}
             </span>
@@ -105,8 +101,9 @@ function SidebarContent({
                 color: active ? continentTheme.primary : '#525252',
               }}
             >
-              <item.icon
-                className="h-[18px] w-[18px]"
+              <item.Icon
+                size={18}
+                weight={active ? 'fill' : 'duotone'}
                 style={{ color: active ? continentTheme.primary : '#737373' }}
               />
               <span className="flex-1">{item.label}</span>
@@ -149,7 +146,7 @@ function SidebarContent({
                 color: active ? continentTheme.primary : '#737373',
               }}
             >
-              <item.icon className="h-4 w-4" />
+              <item.Icon size={16} weight={active ? 'fill' : 'duotone'} />
               {item.label}
             </Link>
           );
@@ -175,7 +172,7 @@ function SidebarContent({
             type="submit"
             className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors w-full px-2 py-1.5 rounded-lg hover:bg-black/5"
           >
-            <LogOut className="h-4 w-4" />
+            <SignOut size={16} weight="duotone" />
             Déconnexion
           </button>
         </form>
@@ -209,7 +206,7 @@ export function TravelerSidebar(props: TravelerSidebarProps) {
           className="h-10 w-10 rounded-xl flex items-center justify-center hover:bg-black/5 transition-colors"
           aria-label="Ouvrir le menu"
         >
-          <Menu className="h-5 w-5 text-gray-700" />
+          <List size={20} weight="bold" className="text-gray-700" />
         </button>
 
         <Link href="/client">
