@@ -1,12 +1,21 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Save, Loader2, MessageSquare, Home, Star, ChevronDown, ChevronRight } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Save, Loader2, MessageSquare, Home, Star, ChevronDown, ChevronRight,
+  ImageIcon, Upload, Trash2,
+} from 'lucide-react';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { useBatchUpsertSnippets, useResolvedSnippets } from '@/hooks/useCmsSnippets';
-import type { CmsSnippet, SnippetBatchItem } from '@/lib/api/cms-snippets';
+import {
+  uploadCmsImage,
+  saveCmsSnippets,
+  loadCmsSnippets,
+  type CmsSnippetInput,
+  type CmsSnippetRow,
+} from '@/lib/actions/cms-images';
 
 // ── Section definitions ──────────────────────────────────────────────────────
 
@@ -83,44 +92,276 @@ const SECTIONS: SectionDef[] = [
   },
 ];
 
+// ── Image field definitions ──────────────────────────────────────────────────
+
+interface ImageFieldDef {
+  key: string;
+  label: string;
+  description: string;
+  aspect: string;        // e.g. "16:9", "4:5"
+  dimensions: string;    // e.g. "1920×1080"
+  purpose: string;       // used for storage path
+}
+
+const IMAGE_FIELDS: ImageFieldDef[] = [
+  {
+    key: 'images.hero_destination',
+    label: 'Photo Header Destination',
+    description: 'Image de fond du header dans l\'espace voyageur (page dossier). Format paysage recommandé.',
+    aspect: '16/9',
+    dimensions: '1920 × 600 px',
+    purpose: 'hero-destination',
+  },
+  {
+    key: 'images.salon_de_the_aquarelle',
+    label: 'Aquarelle Salon de Thé',
+    description: 'Illustration aquarelle affichée en bannière du Salon de Thé (chat voyageur).',
+    aspect: '16/9',
+    dimensions: '1456 × 816 px',
+    purpose: 'salon-de-the',
+  },
+];
+
+// ── ImageUploadField component ───────────────────────────────────────────────
+
+function ImageUploadField({
+  field,
+  currentUrl,
+  onUrlChange,
+}: {
+  field: ImageFieldDef;
+  currentUrl: string;
+  onUrlChange: (url: string) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState('');
+
+  const handleFile = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setUploadMessage('Seules les images sont acceptées');
+      setTimeout(() => setUploadMessage(''), 3000);
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setUploadMessage('10 MB maximum');
+      setTimeout(() => setUploadMessage(''), 3000);
+      return;
+    }
+
+    setUploading(true);
+    setUploadMessage('');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('purpose', field.purpose);
+
+      const result = await uploadCmsImage(formData);
+
+      if (result.success && result.url) {
+        onUrlChange(result.url);
+        setUploadMessage('Image uploadée ✓');
+        setTimeout(() => setUploadMessage(''), 3000);
+      } else {
+        setUploadMessage(result.error || 'Erreur');
+        setTimeout(() => setUploadMessage(''), 4000);
+      }
+    } catch {
+      setUploadMessage('Erreur réseau');
+      setTimeout(() => setUploadMessage(''), 3000);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleFile(file);
+    // Reset input so same file can be re-selected
+    e.target.value = '';
+  };
+
+  return (
+    <div>
+      <label className="text-xs font-medium text-gray-500 mb-1.5 block">
+        {field.label}
+      </label>
+      <p className="text-[11px] text-gray-400 mb-2">
+        {field.description} — Dimensions idéales : {field.dimensions}
+      </p>
+
+      {/* Preview + Upload zone */}
+      <div className="flex gap-4 items-start">
+        {/* Preview */}
+        <div
+          className="relative flex-shrink-0 rounded-lg border border-gray-200 bg-gray-50 overflow-hidden"
+          style={{ width: 220, aspectRatio: field.aspect }}
+        >
+          {currentUrl ? (
+            <Image
+              src={currentUrl}
+              alt={field.label}
+              fill
+              className="object-cover"
+              sizes="220px"
+            />
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-300">
+              <ImageIcon className="h-8 w-8 mb-1" />
+              <span className="text-[10px]">Pas d&apos;image</span>
+            </div>
+          )}
+        </div>
+
+        {/* Upload area */}
+        <div className="flex-1 space-y-2">
+          {/* Drop zone */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`
+              border-2 border-dashed rounded-lg px-4 py-5 text-center cursor-pointer
+              transition-colors
+              ${dragOver
+                ? 'border-blue-400 bg-blue-50'
+                : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }
+            `}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/avif"
+              onChange={handleInputChange}
+              className="hidden"
+            />
+
+            {uploading ? (
+              <div className="flex items-center justify-center gap-2 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Upload en cours…
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-1">
+                <Upload className="h-5 w-5 text-gray-400" />
+                <span className="text-xs text-gray-500">
+                  Glisser-déposer ou <span className="text-blue-600 underline">parcourir</span>
+                </span>
+                <span className="text-[10px] text-gray-400">
+                  JPEG, PNG, WebP · 10 MB max
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* URL manual input */}
+          <div className="flex gap-2">
+            <Input
+              type="url"
+              value={currentUrl}
+              onChange={(e) => onUrlChange(e.target.value)}
+              placeholder="https://... (ou uploader ci-dessus)"
+              className="text-xs h-8"
+            />
+            {currentUrl && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-gray-400 hover:text-red-500"
+                onClick={() => onUrlChange('')}
+                title="Supprimer l'image"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+
+          {/* Upload message */}
+          {uploadMessage && (
+            <span className={`text-xs ${uploadMessage.includes('✓') ? 'text-green-600' : 'text-red-600'}`}>
+              {uploadMessage}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function WidgetsEditorPage() {
-  // Load all snippet categories we need
-  const { data: sidebarSnippets, loading: loadingSidebar } = useResolvedSnippets('sidebar', 'fr');
-  const { data: welcomeSnippets, loading: loadingWelcome } = useResolvedSnippets('welcome', 'fr');
-  const { data: fidelitySnippets, loading: loadingFidelity } = useResolvedSnippets('fidelity', 'fr');
+// All categories to load
+const ALL_CATEGORIES = ['sidebar', 'welcome', 'fidelity', 'images'];
 
-  const { mutate: batchSave, loading: saving } = useBatchUpsertSnippets();
+export default function WidgetsEditorPage() {
+  const [allSnippets, setAllSnippets] = useState<CmsSnippetRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const [values, setValues] = useState<Record<string, string>>({});
   const [fidelityMeta, setFidelityMeta] = useState<Record<string, { emoji: string; min_trips: number }>>({});
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['sidebar']));
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['images', 'sidebar']));
   const [saveMessages, setSaveMessages] = useState<Record<string, string>>({});
 
-  const loading = loadingSidebar || loadingWelcome || loadingFidelity;
+  // Image state
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [imageSaveMessage, setImageSaveMessage] = useState('');
 
-  // Load snippets into local state
-  useEffect(() => {
-    const allSnippets = [...(sidebarSnippets || []), ...(welcomeSnippets || []), ...(fidelitySnippets || [])];
-    if (allSnippets.length === 0) return;
+  // ── Load all snippets via server action ─────────────────────────────────
 
-    const newValues: Record<string, string> = {};
-    const newMeta: Record<string, { emoji: string; min_trips: number }> = {};
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const results = await Promise.all(
+        ALL_CATEGORIES.map(cat => loadCmsSnippets(cat))
+      );
+      const flat = results.flat();
+      setAllSnippets(flat);
 
-    for (const s of allSnippets) {
-      newValues[s.snippet_key] = s.content_json?.fr || '';
-      if (s.category === 'fidelity' && s.metadata_json) {
-        newMeta[s.snippet_key] = {
-          emoji: (s.metadata_json.emoji as string) || '',
-          min_trips: (s.metadata_json.min_trips as number) || 0,
-        };
+      // Populate local state
+      const newValues: Record<string, string> = {};
+      const newMeta: Record<string, { emoji: string; min_trips: number }> = {};
+      const newImageUrls: Record<string, string> = {};
+
+      for (const s of flat) {
+        if (s.category === 'images') {
+          newImageUrls[s.snippet_key] = s.content_json?.fr || '';
+        } else {
+          newValues[s.snippet_key] = s.content_json?.fr || '';
+        }
+        if (s.category === 'fidelity' && s.metadata_json) {
+          newMeta[s.snippet_key] = {
+            emoji: (s.metadata_json.emoji as string) || '',
+            min_trips: (s.metadata_json.min_trips as number) || 0,
+          };
+        }
       }
-    }
 
-    setValues(prev => ({ ...prev, ...newValues }));
-    setFidelityMeta(prev => ({ ...prev, ...newMeta }));
-  }, [sidebarSnippets, welcomeSnippets, fidelitySnippets]);
+      setValues(prev => ({ ...prev, ...newValues }));
+      setFidelityMeta(prev => ({ ...prev, ...newMeta }));
+      setImageUrls(prev => ({ ...prev, ...newImageUrls }));
+    } catch (err) {
+      console.error('[WidgetsEditor] Load error:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
 
   const toggleSection = (id: string) => {
     setExpandedSections(prev => {
@@ -131,13 +372,16 @@ export default function WidgetsEditorPage() {
     });
   };
 
+  // ── Save section via server action ──────────────────────────────────────
+
   const handleSaveSection = async (section: SectionDef) => {
-    const items: SnippetBatchItem[] = section.fields.map(field => {
-      const base: SnippetBatchItem = {
+    setSaving(true);
+    const items: CmsSnippetInput[] = section.fields.map((field, i) => {
+      const base: CmsSnippetInput = {
         snippet_key: field.key,
         category: section.category,
         content_json: { fr: values[field.key] || '' },
-        sort_order: section.fields.indexOf(field),
+        sort_order: i,
         is_active: true,
       };
 
@@ -150,14 +394,50 @@ export default function WidgetsEditorPage() {
     });
 
     try {
-      await batchSave(items);
-      setSaveMessages(prev => ({ ...prev, [section.id]: 'Enregistré ✓' }));
-      setTimeout(() => setSaveMessages(prev => ({ ...prev, [section.id]: '' })), 3000);
+      const result = await saveCmsSnippets(items);
+      if (result.success) {
+        setSaveMessages(prev => ({ ...prev, [section.id]: 'Enregistré ✓' }));
+        setTimeout(() => setSaveMessages(prev => ({ ...prev, [section.id]: '' })), 3000);
+      } else {
+        setSaveMessages(prev => ({ ...prev, [section.id]: result.error || 'Erreur' }));
+        setTimeout(() => setSaveMessages(prev => ({ ...prev, [section.id]: '' })), 4000);
+      }
     } catch {
-      setSaveMessages(prev => ({ ...prev, [section.id]: 'Erreur' }));
+      setSaveMessages(prev => ({ ...prev, [section.id]: 'Erreur réseau' }));
       setTimeout(() => setSaveMessages(prev => ({ ...prev, [section.id]: '' })), 3000);
+    } finally {
+      setSaving(false);
     }
   };
+
+  const handleSaveImages = async () => {
+    setSaving(true);
+    const items: CmsSnippetInput[] = IMAGE_FIELDS.map((field, i) => ({
+      snippet_key: field.key,
+      category: 'images',
+      content_json: { fr: imageUrls[field.key] || '' },
+      sort_order: i,
+      is_active: true,
+    }));
+
+    try {
+      const result = await saveCmsSnippets(items);
+      if (result.success) {
+        setImageSaveMessage('Enregistré ✓');
+        setTimeout(() => setImageSaveMessage(''), 3000);
+      } else {
+        setImageSaveMessage(result.error || 'Erreur');
+        setTimeout(() => setImageSaveMessage(''), 4000);
+      }
+    } catch {
+      setImageSaveMessage('Erreur réseau');
+      setTimeout(() => setImageSaveMessage(''), 3000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isImagesExpanded = expandedSections.has('images');
 
   return (
     <div className="h-full flex flex-col">
@@ -166,7 +446,7 @@ export default function WidgetsEditorPage() {
         <div>
           <h1 className="text-2xl font-bold">Widgets & textes</h1>
           <p className="text-muted-foreground mt-1">
-            Personnalisez les textes affichés dans l'espace voyageur : sidebar, accueil, fidélité
+            Personnalisez les textes et visuels affichés dans l&apos;espace voyageur
           </p>
         </div>
       </div>
@@ -179,6 +459,67 @@ export default function WidgetsEditorPage() {
           </div>
         ) : (
           <div className="space-y-4 max-w-4xl">
+
+            {/* ── Images section ────────────────────────────────────────── */}
+            <div className="border rounded-lg bg-white overflow-hidden">
+              {/* Section header */}
+              <button
+                onClick={() => toggleSection('images')}
+                className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50 transition-colors text-left"
+              >
+                {isImagesExpanded ? (
+                  <ChevronDown className="h-4 w-4 text-gray-400" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-gray-400" />
+                )}
+                <div className="h-9 w-9 rounded-lg bg-purple-50 flex items-center justify-center">
+                  <ImageIcon className="h-5 w-5 text-purple-500" />
+                </div>
+                <div className="flex-1">
+                  <h2 className="font-semibold text-sm">Images</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Photo header destination et aquarelle du Salon de Thé
+                  </p>
+                </div>
+                {imageSaveMessage ? (
+                  <span className={`text-xs ${imageSaveMessage.includes('✓') ? 'text-green-600' : 'text-red-600'}`}>
+                    {imageSaveMessage}
+                  </span>
+                ) : null}
+              </button>
+
+              {/* Section content */}
+              {isImagesExpanded && (
+                <div className="border-t px-5 py-4 space-y-6">
+                  {IMAGE_FIELDS.map(field => (
+                    <ImageUploadField
+                      key={field.key}
+                      field={field}
+                      currentUrl={imageUrls[field.key] || ''}
+                      onUrlChange={(url) => setImageUrls(prev => ({ ...prev, [field.key]: url }))}
+                    />
+                  ))}
+
+                  {/* Save button */}
+                  <div className="pt-2 border-t flex justify-end">
+                    <Button
+                      size="sm"
+                      onClick={handleSaveImages}
+                      disabled={saving}
+                    >
+                      {saving ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4 mr-2" />
+                      )}
+                      Enregistrer les images
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Text sections ─────────────────────────────────────────── */}
             {SECTIONS.map(section => {
               const isExpanded = expandedSections.has(section.id);
               const SectionIcon = section.icon;

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import type { InvoicePublicData } from '@/lib/api/types'
 import { InvoiceClientWrapper } from './invoice-client-wrapper'
+import { BackButton } from './back-button'
 
 // Prevent search engines from indexing invoices
 export const metadata: Metadata = {
@@ -56,26 +57,29 @@ export default async function PublicInvoicePage({
               {data.type_label} {data.number}
             </span>
           </div>
-          <a
-            href={`/api/public/invoices/${token}/pdf`}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-white text-sm font-medium transition hover:opacity-90"
-            style={{ backgroundColor: '#0FB6BC' }}
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
+          <div className="flex items-center gap-3">
+            <a
+              href={`/api/public/invoices/${token}/pdf`}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-white text-sm font-medium transition hover:opacity-90"
+              style={{ backgroundColor: '#0FB6BC' }}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V3"
-              />
-            </svg>
-            Télécharger PDF
-          </a>
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V3"
+                />
+              </svg>
+              Télécharger PDF
+            </a>
+            <BackButton />
+          </div>
         </div>
       </div>
 

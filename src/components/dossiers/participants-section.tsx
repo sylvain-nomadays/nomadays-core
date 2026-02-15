@@ -64,6 +64,16 @@ import { CountryCombobox } from '@/components/ui/country-combobox'
 import { getCountryFlag } from '@/lib/constants/countries'
 import { cn } from '@/lib/utils'
 import {
+  CIVILITIES,
+  DIETARY_OPTIONS,
+  COMMON_ALLERGIES,
+  extractAllergies,
+  getDietLabel,
+  normalizeDietValue,
+  calculateAge,
+  getAgeCategoryFromBirthDate,
+} from '@/lib/constants/participant-options'
+import {
   Command,
   CommandEmpty,
   CommandGroup,
@@ -77,28 +87,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 
-const CIVILITIES: { value: Civility; label: string }[] = [
-  { value: 'mr', label: 'M.' },
-  { value: 'mrs', label: 'Mme' },
-  { value: 'mx', label: 'Mx' },
-  { value: 'dr', label: 'Dr' },
-  { value: 'other', label: 'Autre' },
-]
-
-const DIETARY_OPTIONS = [
-  { value: '', label: 'Standard' },
-  { value: 'vegetarian', label: 'Végétarien' },
-  { value: 'vegan', label: 'Végan' },
-  { value: 'gluten_free', label: 'Sans gluten' },
-  { value: 'halal', label: 'Halal' },
-  { value: 'kosher', label: 'Casher' },
-  { value: 'other', label: 'Autre' },
-]
-
-const COMMON_ALLERGIES = [
-  'Arachides', 'Fruits à coque', 'Lait', 'Œufs', 'Poisson',
-  'Crustacés', 'Soja', 'Gluten', 'Sésame',
-]
+// CIVILITIES, DIETARY_OPTIONS, COMMON_ALLERGIES imported from @/lib/constants/participant-options
 
 interface Participant {
   id: string
@@ -134,25 +123,7 @@ interface DossierParticipant {
   age_category?: 'adult' | 'teen' | 'child' | 'infant'
 }
 
-// Helper: calculate age from birth date
-function calculateAge(birthDate: string): number {
-  const today = new Date()
-  const birth = new Date(birthDate)
-  let age = today.getFullYear() - birth.getFullYear()
-  const monthDiff = today.getMonth() - birth.getMonth()
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
-    age--
-  }
-  return age
-}
-
-// Helper: infer age category from age
-function getAgeCategoryFromAge(age: number): 'adult' | 'teen' | 'child' | 'infant' {
-  if (age >= 18) return 'adult'
-  if (age >= 12) return 'teen'
-  if (age >= 2) return 'child'
-  return 'infant'
-}
+// calculateAge, getAgeCategoryFromBirthDate imported from @/lib/constants/participant-options
 
 // Helper: format age display
 function formatAge(birthDate: string | null | undefined): string | null {
@@ -168,22 +139,7 @@ function formatAge(birthDate: string | null | undefined): string | null {
   return `${age} ans`
 }
 
-// Helper: get diet label from value
-function getDietLabel(diet: string | null | undefined): string | null {
-  if (!diet) return null
-  const option = DIETARY_OPTIONS.find(d => d.value === diet)
-  return option?.label || diet
-}
-
-// Helper: extract allergies from medical_notes
-function extractAllergies(medicalNotes: string | null | undefined): string[] {
-  if (!medicalNotes) return []
-  const match = medicalNotes.match(/^Allergies:\s*(.+?)(?:\n|$)/)
-  if (match && match[1]) {
-    return match[1].split(',').map(a => a.trim()).filter(Boolean)
-  }
-  return []
-}
+// getDietLabel, extractAllergies imported from @/lib/constants/participant-options
 
 // Helper: check if a participant has a birthday during the trip
 function getBirthdayDuringTrip(
@@ -361,7 +317,7 @@ export function ParticipantsSection({
       country: p.country || '',
       passportNumber: p.passport_number || '',
       passportExpiry: p.passport_expiry || '',
-      dietaryRequirements: p.dietary_requirements || '',
+      dietaryRequirements: normalizeDietValue(p.dietary_requirements),
       allergies: allergies,
       allergyOther: '',
       medicalNotes: medicalNotesRest,
@@ -905,8 +861,7 @@ export function ParticipantsSection({
                       const updates: Partial<typeof newParticipant> = { birthDate }
                       // Auto-calculate age category
                       if (birthDate) {
-                        const age = calculateAge(birthDate)
-                        updates.ageCategory = getAgeCategoryFromAge(age)
+                        updates.ageCategory = getAgeCategoryFromBirthDate(birthDate)
                       }
                       setNewParticipant({ ...newParticipant, ...updates })
                     }}
@@ -1318,8 +1273,7 @@ export function ParticipantsSection({
                         const birthDate = e.target.value
                         const updates: Partial<typeof editForm> = { birthDate }
                         if (birthDate) {
-                          const age = calculateAge(birthDate)
-                          updates.ageCategory = getAgeCategoryFromAge(age)
+                          updates.ageCategory = getAgeCategoryFromBirthDate(birthDate)
                         }
                         setEditForm({ ...editForm, ...updates })
                       }}

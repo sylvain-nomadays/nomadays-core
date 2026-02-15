@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useTransition, useEffect, useCallback } from 'react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import {
@@ -16,6 +16,8 @@ import {
   Pencil,
   HelpCircle,
   Link2,
+  Eye,
+  User,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -37,6 +39,9 @@ import { useInvoices } from '@/hooks/useInvoices'
 import { CreateInvoicePanel, type InvoiceParticipant } from '@/components/invoices/create-invoice-panel'
 import { InvoiceDetailSheet } from '@/components/invoices/invoice-detail-sheet'
 import type { InvoiceSummary, InvoiceType, InvoiceStatus } from '@/lib/api/types'
+import { IdentificationBadge } from '@phosphor-icons/react'
+import { requestPassportCopies, getDossierPassportDocuments } from '@/lib/actions/documents'
+import type { DossierDocument } from '@/lib/actions/documents'
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -119,6 +124,27 @@ export function InvoicesSection({
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [createType, setCreateType] = useState<InvoiceType>('DEV')
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | undefined>(undefined)
+  const [isPendingPassport, startTransitionPassport] = useTransition()
+
+  // ---- Passport documents ----
+  const [passportDocs, setPassportDocs] = useState<DossierDocument[]>([])
+  const [passportsLoading, setPassportsLoading] = useState(true)
+
+  const loadPassports = useCallback(async () => {
+    setPassportsLoading(true)
+    try {
+      const docs = await getDossierPassportDocuments(dossierId)
+      setPassportDocs(docs)
+    } catch {
+      console.error('Error loading passport documents')
+    } finally {
+      setPassportsLoading(false)
+    }
+  }, [dossierId])
+
+  useEffect(() => {
+    loadPassports()
+  }, [loadPassports])
 
   const {
     invoices,
@@ -231,6 +257,18 @@ export function InvoicesSection({
     }
   }
 
+  const handleRequestPassports = () => {
+    startTransitionPassport(async () => {
+      try {
+        const result = await requestPassportCopies({ dossierId })
+        toast.success(`Demande envoyée pour ${result.participantsCount} voyageur${result.participantsCount > 1 ? 's' : ''}`)
+        loadPassports() // Refresh passport list
+      } catch (err: any) {
+        toast.error(err?.message || 'Erreur lors de l\'envoi de la demande')
+      }
+    })
+  }
+
   // ---- Computed ----
 
   const totalInvoiced = invoices
@@ -269,10 +307,24 @@ export function InvoicesSection({
     }
   })()
 
+  // ---- Passport helpers ----
+
+  const getPassportPublicUrl = (storagePath: string) => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+    return `${supabaseUrl}/storage/v1/object/public/documents/${storagePath}`
+  }
+
+  const getParticipantName = (doc: DossierDocument) => {
+    // Extract name from document name "Passeport — Nom Prénom"
+    const match = doc.name?.match(/Passeport\s*—\s*(.+)/)
+    return match?.[1] || 'Voyageur'
+  }
+
   // ---- Render ----
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* ──── Documents & Facturation Section ──── */}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -332,24 +384,26 @@ export function InvoicesSection({
           </Popover>
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm">
-              <Plus className="h-4 w-4 mr-1" />
-              Nouveau document
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => handleCreateOpen('DEV')}>
-              <Badge className={`${TYPE_BADGE_STYLES.DEV} mr-2 text-xs`}>DEV</Badge>
-              Devis
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => handleCreateOpen('PRO')}>
-              <Badge className={`${TYPE_BADGE_STYLES.PRO} mr-2 text-xs`}>PRO</Badge>
-              Proforma
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm">
+                <Plus className="h-4 w-4 mr-1" />
+                Nouveau document
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleCreateOpen('DEV')}>
+                <Badge className={`${TYPE_BADGE_STYLES.DEV} mr-2 text-xs`}>DEV</Badge>
+                Devis
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleCreateOpen('PRO')}>
+                <Badge className={`${TYPE_BADGE_STYLES.PRO} mr-2 text-xs`}>PRO</Badge>
+                Proforma
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* Filter chips */}
@@ -589,6 +643,109 @@ export function InvoicesSection({
         onClose={() => setSelectedInvoiceId(undefined)}
         onRefresh={refetch}
       />
+
+      {/* ──── Passport Documents Section ──── */}
+      {(passportDocs.length > 0 || !passportsLoading) && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <IdentificationBadge size={20} weight="duotone" className="text-primary-600" />
+              <h3 className="text-lg font-semibold">Passeports reçus</h3>
+              {passportDocs.length > 0 && (
+                <Badge className="bg-primary-100 text-primary-800 border-primary-200 text-xs">
+                  {passportDocs.length}
+                </Badge>
+              )}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRequestPassports}
+              disabled={isPendingPassport}
+              className="gap-1.5"
+            >
+              <IdentificationBadge size={16} weight="duotone" />
+              {isPendingPassport ? 'Envoi...' : 'Demander les passeports'}
+            </Button>
+          </div>
+
+          {passportsLoading ? (
+            <Card>
+              <CardContent className="py-6 text-center text-muted-foreground text-sm">
+                Chargement...
+              </CardContent>
+            </Card>
+          ) : passportDocs.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-8">
+                <IdentificationBadge size={32} weight="duotone" className="text-muted-foreground/20 mb-2" />
+                <p className="text-sm text-muted-foreground">
+                  Aucun passeport reçu pour le moment
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {passportDocs.map((doc) => {
+                const publicUrl = getPassportPublicUrl(doc.file_url)
+                const participantName = getParticipantName(doc)
+                const isImage = doc.mime_type?.startsWith('image/')
+
+                return (
+                  <Card key={doc.id} className="overflow-hidden hover:shadow-md hover:border-primary-200 transition-all">
+                    {/* Preview thumbnail */}
+                    {isImage && (
+                      <div className="relative h-36 bg-gray-50 border-b">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={publicUrl}
+                          alt={`Passeport ${participantName}`}
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+                    )}
+
+                    <CardContent className="p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <User className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                            <span className="text-sm font-medium truncate">{participantName}</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {formatDate(doc.created_at)}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={() => window.open(publicUrl, '_blank')}
+                            title="Voir en plein écran"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            asChild
+                          >
+                            <a href={publicUrl} download={`passeport-${participantName}.${doc.file_url.split('.').pop()}`} title="Télécharger">
+                              <Download className="h-3.5 w-3.5" />
+                            </a>
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
