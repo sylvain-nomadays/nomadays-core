@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { Suspense } from 'react';
+import { Suspense, useEffect } from 'react';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ interface VoyageTabsProps {
 
 // ─── Valid tab values ────────────────────────────────────────────────────────
 
-const VALID_TABS = ['proposals', 'program', 'infos', 'flights', 'travelers', 'messages', 'documents'];
+const VALID_TABS = ['proposals', 'infos', 'flights', 'travelers', 'messages', 'documents'];
 
 // ─── Inner component (needs Suspense boundary for useSearchParams) ──────────
 
@@ -30,6 +30,12 @@ function VoyageTabsInner({ tabs, children }: VoyageTabsProps) {
 
   const tabParam = searchParams.get('tab');
   const activeTab = tabParam && VALID_TABS.includes(tabParam) ? tabParam : 'proposals';
+
+  // Sync active tab to body for global CSS targeting (e.g. sidebar visibility)
+  useEffect(() => {
+    document.body.setAttribute('data-active-tab', activeTab);
+    return () => { document.body.removeAttribute('data-active-tab'); };
+  }, [activeTab]);
 
   const handleTabChange = (value: string) => {
     const params = new URLSearchParams(searchParams.toString());

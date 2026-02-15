@@ -1,6 +1,5 @@
 import { MapPin } from '@phosphor-icons/react/dist/ssr';
 import { DayCard } from './day-card';
-import { PrintProgramButton } from './print-program-button';
 import type { ContinentTheme } from '../continent-theme';
 import type { ReactionType, PaceType } from '@/lib/actions/day-feedback';
 
@@ -103,8 +102,7 @@ interface DayByDayProgramProps {
   tripDays: TripDayData[];
   photos: TripPhotoData[];
   continentTheme: ContinentTheme;
-  tripName?: string | null;
-  durationDays?: number | null;
+  startDate?: string | null;
   accommodationsMap?: Record<number, AccommodationLookup>;
   roomCategoriesMap?: Record<number, RoomCategoryLookup[]>;
   accommodationPhotosMap?: Record<number, AccommodationPhotoLookup[]>;
@@ -118,8 +116,7 @@ export function DayByDayProgram({
   tripDays,
   photos,
   continentTheme,
-  tripName,
-  durationDays,
+  startDate,
   accommodationsMap,
   roomCategoriesMap,
   accommodationPhotosMap,
@@ -156,21 +153,6 @@ export function DayByDayProgram({
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      {tripName && (
-        <div className="mb-2 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">{tripName}</h2>
-            {durationDays && (
-              <p className="text-sm text-gray-500 mt-0.5">
-                {durationDays} jours
-              </p>
-            )}
-          </div>
-          <PrintProgramButton themeColor={continentTheme.primary} />
-        </div>
-      )}
-
       {/* Day cards */}
       <div className="space-y-4">
         {sortedDays.map((day) => (
@@ -189,6 +171,7 @@ export function DayByDayProgram({
             formulas={day.formulas ?? []}
             photo={photosByDay.get(day.day_number) ?? null}
             continentTheme={continentTheme}
+            startDate={startDate}
             accommodationsMap={accommodationsMap}
             roomCategoriesMap={roomCategoriesMap}
             accommodationPhotosMap={accommodationPhotosMap}

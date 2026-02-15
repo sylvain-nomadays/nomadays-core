@@ -43,13 +43,12 @@ function getNavItems(proposalCount: number): NavItem[] {
       label: 'Propositions',
       icon: ClipboardText,
       badge: proposalCount > 0 ? proposalCount : undefined,
-      section: 'Navigation',
+      section: 'Naviguer',
     },
-    { tab: 'messages', label: 'Salon de Thé', icon: ChatCircleDots, section: 'Navigation' },
-    { tab: 'documents', label: 'Documents', icon: FileText, section: 'Navigation' },
+    { tab: 'flights', label: 'Vols', icon: AirplaneTilt, section: 'Naviguer' },
+    { tab: 'travelers', label: 'Voyageurs', icon: UsersThree, section: 'Naviguer' },
+    { tab: 'documents', label: 'Documents', icon: FileText, section: 'Naviguer' },
     { tab: 'infos', label: 'Carnets pratiques', icon: BookOpenText, section: 'Préparer' },
-    { tab: 'flights', label: 'Vols', icon: AirplaneTilt, section: 'Préparer' },
-    { tab: 'travelers', label: 'Voyageurs', icon: UsersThree, section: 'Préparer' },
   ]
 }
 
@@ -70,6 +69,7 @@ function DestinationSidebarInner({
 
   const currentTab = searchParams.get('tab') || 'proposals'
   const navItems = getNavItems(proposalCount)
+  const isSalonActive = currentTab === 'messages'
 
   const handleNavClick = (tab: string) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -85,10 +85,12 @@ function DestinationSidebarInner({
   // Group nav items by section
   const sections: Record<string, NavItem[]> = {}
   for (const item of navItems) {
-    const section = item.section || 'Navigation'
+    const section = item.section || 'Naviguer'
     if (!sections[section]) sections[section] = []
     sections[section].push(item)
   }
+
+  const advisorFirstName = hostName?.split(' ')[0] || null
 
   return (
     <aside className="bg-white border-r border-gray-200 p-6 hidden lg:block">
@@ -133,14 +135,14 @@ function DestinationSidebarInner({
         </div>
       )}
 
-      {/* Navigation sections */}
-      {Object.entries(sections).map(([sectionName, items]) => (
-        <div key={sectionName} className="mb-6">
+      {/* ─── Section Naviguer ──────────────────────────────────────────────── */}
+      {sections['Naviguer'] && (
+        <div className="mb-6">
           <div className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3 px-3.5">
-            {sectionName}
+            Naviguer
           </div>
           <nav className="space-y-1">
-            {items.map((item) => {
+            {sections['Naviguer'].map((item) => {
               const isActive = currentTab === item.tab
               const ItemIcon = item.icon
               return (
@@ -169,7 +171,91 @@ function DestinationSidebarInner({
             })}
           </nav>
         </div>
-      ))}
+      )}
+
+      {/* ─── Salon de Thé — encart spécial ─────────────────────────────────── */}
+      <button
+        onClick={() => handleNavClick('messages')}
+        className="w-full rounded-2xl p-5 text-left transition-all group relative overflow-hidden mb-6"
+        style={{
+          backgroundColor: isSalonActive ? continentTheme.light : '#FAF7F2',
+          border: isSalonActive ? `2px solid ${continentTheme.primary}40` : '2px solid transparent',
+        }}
+      >
+        {/* Decorative tea icon — subtle background */}
+        <div className="absolute -right-2 -top-2 opacity-[0.06] pointer-events-none">
+          <ChatCircleDots size={80} weight="duotone" />
+        </div>
+
+        <div className="relative">
+          <div className="flex items-center gap-2.5 mb-2">
+            <div
+              className="h-8 w-8 rounded-xl flex items-center justify-center"
+              style={{ backgroundColor: `${continentTheme.primary}15` }}
+            >
+              <ChatCircleDots
+                size={16}
+                weight="duotone"
+                style={{ color: continentTheme.primary }}
+              />
+            </div>
+            <h3
+              className="text-[1.15rem] text-gray-800"
+              style={{
+                fontFamily: 'var(--font-cormorant), "Cormorant Garamond", Georgia, serif',
+                fontWeight: 600,
+                letterSpacing: '0.3px',
+              }}
+            >
+              Le Salon de Thé
+            </h3>
+          </div>
+          <p
+            className="text-[12px] leading-relaxed ml-[42px]"
+            style={{
+              color: '#7A7267',
+              fontStyle: 'italic',
+            }}
+          >
+            Prenez le temps d&apos;un thé pour imaginer votre voyage
+            {advisorFirstName && (
+              <>
+                {' '}avec <span style={{ color: continentTheme.primary, fontWeight: 500, fontStyle: 'normal' }}>{advisorFirstName}</span>
+              </>
+            )}
+          </p>
+        </div>
+      </button>
+
+      {/* ─── Section Préparer ──────────────────────────────────────────────── */}
+      {sections['Préparer'] && (
+        <div className="mb-6">
+          <div className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3 px-3.5">
+            Préparer
+          </div>
+          <nav className="space-y-1">
+            {sections['Préparer'].map((item) => {
+              const isActive = currentTab === item.tab
+              const ItemIcon = item.icon
+              return (
+                <button
+                  key={item.tab}
+                  onClick={() => handleNavClick(item.tab)}
+                  className="flex items-center gap-2.5 w-full px-3.5 py-3 rounded-[10px] text-sm transition-all text-left"
+                  style={{
+                    backgroundColor: isActive ? continentTheme.light : 'transparent',
+                    color: isActive ? continentTheme.primary : '#2D3436',
+                    fontWeight: isActive ? 600 : 400,
+                  }}
+                >
+                  <ItemIcon size={18} weight="duotone" style={{ color: isActive ? continentTheme.primary : '#636E72' }} />
+                  <span className="flex-1">{item.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+        </div>
+      )}
     </aside>
   )
 }

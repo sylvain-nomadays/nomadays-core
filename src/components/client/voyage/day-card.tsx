@@ -28,6 +28,7 @@ import type {
   AccommodationPhotoLookup,
   ConditionDataLookup,
 } from './day-by-day-program';
+import { formatTripDayLabel } from '@/lib/formatTripDate';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,7 @@ interface DayCardProps {
   formulas: FormulaBlock[];
   photo?: DayPhoto | null;
   continentTheme: ContinentTheme;
+  startDate?: string | null;
   accommodationsMap?: Record<number, AccommodationLookup>;
   roomCategoriesMap?: Record<number, RoomCategoryLookup[]>;
   accommodationPhotosMap?: Record<number, AccommodationPhotoLookup[]>;
@@ -196,16 +198,15 @@ export function DayCard({
   formulas,
   photo,
   continentTheme,
+  startDate,
   accommodationsMap,
   roomCategoriesMap,
   accommodationPhotosMap,
   conditionData,
   feedbackContext,
 }: DayCardProps) {
-  const dayLabel =
-    dayNumberEnd && dayNumberEnd > dayNumber
-      ? `Jours ${dayNumber}-${dayNumberEnd}`
-      : `Jour ${dayNumber}`;
+  const { dayLabel, dateLabel } = formatTripDayLabel(dayNumber, dayNumberEnd, startDate);
+  const fullDayLabel = dateLabel ? `${dayLabel} – ${dateLabel}` : dayLabel;
 
   const hasLocation = locationFrom || locationTo;
 
@@ -266,10 +267,13 @@ export function DayCard({
             blurDataURL={photo.lqip_data_url ?? undefined}
           />
           <div
-            className="absolute top-3 left-3 px-3 py-1.5 rounded-lg text-sm font-bold text-white"
+            className="absolute top-3 left-3 px-3 py-1.5 rounded-lg text-white"
             style={{ backgroundColor: continentTheme.primary }}
           >
-            {dayLabel}
+            <span className="text-sm font-bold">{dayLabel}</span>
+            {dateLabel && (
+              <span className="text-xs font-medium opacity-90 ml-1.5">– {dateLabel}</span>
+            )}
           </div>
         </div>
       ) : null}
@@ -279,10 +283,13 @@ export function DayCard({
         {/* Day badge (only if no photo) */}
         {(!photo || (!photo.url_large && !photo.url_medium)) && (
           <span
-            className="inline-block px-3 py-1 rounded-lg text-sm font-bold text-white mb-3"
+            className="inline-block px-3 py-1 rounded-lg text-white mb-3"
             style={{ backgroundColor: continentTheme.primary }}
           >
-            {dayLabel}
+            <span className="text-sm font-bold">{dayLabel}</span>
+            {dateLabel && (
+              <span className="text-xs font-medium opacity-90 ml-1.5">– {dateLabel}</span>
+            )}
           </span>
         )}
 
