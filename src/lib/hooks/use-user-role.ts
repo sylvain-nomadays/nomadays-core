@@ -14,6 +14,7 @@ interface UserRoleData {
   role: UserRole | null
   tenantId: string | null
   tenantType: string | null
+  tenantCountryCode: string | null
   tenantSettings: TenantSettings | null
   isNomadays: boolean
   isDmc: boolean
@@ -26,6 +27,7 @@ export function useUserRole(): UserRoleData {
     role: null,
     tenantId: null,
     tenantType: null,
+    tenantCountryCode: null,
     tenantSettings: null,
     isNomadays: false,
     isDmc: false,
@@ -45,14 +47,15 @@ export function useUserRole(): UserRoleData {
 
       const { data: userData } = await supabase
         .from('users')
-        .select('role, tenant_id, tenant:tenants(type, settings)')
+        .select('role, tenant_id, tenant:tenants(type, settings, country_code)')
         .eq('id', user.id)
         .single()
 
       if (userData) {
-        const userRecord = userData as { role: string; tenant_id: string | null; tenant: { type: string; settings: TenantSettings | null } | null }
+        const userRecord = userData as { role: string; tenant_id: string | null; tenant: { type: string; settings: TenantSettings | null; country_code: string | null } | null }
         const role = userRecord.role as UserRole
         const tenantType = userRecord.tenant?.type || null
+        const tenantCountryCode = userRecord.tenant?.country_code || null
         const tenantSettings = (userRecord.tenant?.settings as TenantSettings) || null
 
         const isNomadays = ['admin_nomadays', 'support_nomadays'].includes(role)
@@ -63,6 +66,7 @@ export function useUserRole(): UserRoleData {
           role,
           tenantId: userRecord.tenant_id,
           tenantType,
+          tenantCountryCode,
           tenantSettings,
           isNomadays,
           isDmc,

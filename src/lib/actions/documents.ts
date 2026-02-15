@@ -236,6 +236,30 @@ export async function getDossierOfferDocuments(
 }
 
 // ============================================================
+// LIST PASSPORT DOCUMENTS (uploaded by travelers)
+// ============================================================
+
+export async function getDossierPassportDocuments(
+  dossierId: string
+): Promise<DossierDocument[]> {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('dossier_id', dossierId)
+    .eq('type', 'passport_copy')
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    console.error('Error fetching passport documents:', error)
+    return []
+  }
+
+  return (data || []) as DossierDocument[]
+}
+
+// ============================================================
 // DELETE DOCUMENT
 // ============================================================
 
@@ -400,4 +424,107 @@ export async function publishExternalOffer(
   }
 
   revalidatePath(`/admin/dossiers/${dossierId}`)
+}
+
+// ============================================================
+// REQUEST PASSPORT COPIES (DMC → Client notification)
+// ============================================================
+
+export async function requestPassportCopies(input: {
+  dossierId: string
+}): Promise<{ participantsCount: number }> {
+  const supabase = await createClient()
+  const writeClient = createWriteClient()
+
+  // 1. Fetch dossier info
+  const { data: dossier, error: dossierError } = await supabase
+    .from('dossiers')
+    .select('id, reference, title, advisor_id, assigned_to_id')
+    .eq('id', input.dossierId)
+    .single()
+
+  if (dossierError || !dossier) {
+    throw new Error('Dossier non trouvé')
+  }
+
+  // 2. Get current user (advisor)
+  const { data: { user } } = await supabase.auth.getUser()
+  let advisorName = 'Votre conseiller'
+  if (user?.id) {
+    const { data: advisor } = await supabase
+      .from('users')
+      .select('first_name, last_name')
+      .eq('id', user.id)
+      .single()
+    if (advisor) {
+      advisorName = `${advisor.first_name || ''} ${advisor.last_name || ''}`.trim() || 'Votre conseiller'
+    }
+  }
+
+  // 3. Fetch all participants
+  const { data: dpLinks } = await supabase
+    .from('dossier_participants')
+    .select(`
+      is_lead,
+      participant:participants!dossier_participants_participant_id_fkey(id, first_name, last_name, email)
+    `)
+    .eq('dossier_id', input.dossierId)
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const participants = (dpLinks || []).map((dp: any) => ({
+    id: dp.participant?.id,
+    firstName: dp.participant?.first_name,
+    lastName: dp.participant?.last_name,
+    email: dp.participant?.email,
+    isLead: dp.is_lead,
+  })).filter(p => p.id)
+
+  if (participants.length === 0) {
+    throw new Error('Aucun participant dans ce dossier')
+  }
+
+  // 4. Check which participants already have a passport copy
+  const { data: existingPassports } = await supabase
+    .from('documents')
+    .select('participant_id')
+    .eq('dossier_id', input.dossierId)
+    .eq('type', 'passport_copy')
+
+  const existingIds = new Set((existingPassports || []).map((d: any) => d.participant_id))
+  const missingCount = participants.filter(p => !existingIds.has(p.id)).length
+
+  // 5. Create system message in dossier_messages
+  const threadId = crypto.randomUUID()
+  const messageText = missingCount > 0
+    ? `${advisorName} demande les copies de passeport pour ${missingCount} voyageur${missingCount > 1 ? 's' : ''}. Rendez-vous dans l'onglet Documents de votre espace voyage.`
+    : `${advisorName} demande une mise à jour des copies de passeport.`
+
+  await (writeClient.from('dossier_messages') as any).insert({
+    dossier_id: input.dossierId,
+    thread_id: threadId,
+    direction: 'outbound',
+    sender_type: 'system',
+    sender_name: 'Nomadays',
+    sender_email: 'system@nomadays.com',
+    recipient_email: '',
+    body_text: messageText,
+    body_html: null,
+    attachments: [],
+  })
+
+  // 6. Record event in dossier_events
+  await (writeClient.from('dossier_events') as any).insert({
+    dossier_id: input.dossierId,
+    event_type: 'passport_copies_requested',
+    payload: {
+      requested_by: advisorName,
+      participants_count: participants.length,
+      missing_count: missingCount,
+    },
+  })
+
+  revalidatePath(`/admin/dossiers/${input.dossierId}`)
+  revalidatePath(`/client/voyages/${input.dossierId}`)
+
+  return { participantsCount: participants.length }
 }

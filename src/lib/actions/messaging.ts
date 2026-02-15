@@ -51,7 +51,7 @@ export interface Message {
   dossier_id: string
   thread_id: string
   direction: 'inbound' | 'outbound'
-  sender_type: 'client' | 'advisor' | 'system'
+  sender_type: 'client' | 'advisor' | 'support' | 'system'
   sender_id: string | null
   sender_email: string
   sender_name: string | null
@@ -148,6 +148,11 @@ export async function sendMessage(input: {
     throw new Error('User not found')
   }
 
+  // Auto-tag: Nomadays HQ staff → 'support', DMC staff → 'advisor'
+  const senderType: 'advisor' | 'support' = ['admin_nomadays', 'support_nomadays'].includes(currentUser.role)
+    ? 'support'
+    : 'advisor'
+
   // Récupérer ou créer un thread
   const { data: threadData } = await supabase
     .rpc('get_active_thread', { p_dossier_id: input.dossierId })
@@ -161,7 +166,7 @@ export async function sendMessage(input: {
       dossier_id: input.dossierId,
       thread_id: threadId,
       direction: 'outbound',
-      sender_type: 'advisor',
+      sender_type: senderType,
       sender_id: currentUser.id,
       sender_email: currentUser.email,
       sender_name: `${currentUser.first_name} ${currentUser.last_name}`,
@@ -270,6 +275,11 @@ export async function sendWhatsAppMessage(input: {
     throw new Error('User not found')
   }
 
+  // Auto-tag: Nomadays HQ staff → 'support', DMC staff → 'advisor'
+  const senderType: 'advisor' | 'support' = ['admin_nomadays', 'support_nomadays'].includes(currentUser.role)
+    ? 'support'
+    : 'advisor'
+
   // Récupérer le tenant_id du dossier
   const { data: dossier } = await supabase
     .from('dossiers')
@@ -306,7 +316,7 @@ export async function sendWhatsAppMessage(input: {
       dossier_id: input.dossierId,
       thread_id: threadId,
       direction: 'outbound',
-      sender_type: 'advisor',
+      sender_type: senderType,
       sender_id: currentUser.id,
       sender_email: currentUser.email,
       sender_name: `${currentUser.first_name} ${currentUser.last_name}`,

@@ -208,21 +208,18 @@ export async function addPastTrip(
       return { data: null, error: 'Non authentifié' }
     }
 
-    const { data, error } = await supabase
-      .from('traveler_past_trips' as any)
-      .insert({
-        participant_id: participantId,
-        country_code: countryCode.toUpperCase(),
-        is_nomadays: isNomadays,
-        is_verified: false,
-        note: note || null,
-      })
-      .select()
-      .single()
+    // Use RPC functions to bypass PostgREST schema cache issue
+    const writeClient = createWriteClient()
+    const { data, error } = await writeClient.rpc('insert_past_trip', {
+      p_participant_id: participantId,
+      p_country_code: countryCode.toUpperCase(),
+      p_is_nomadays: isNomadays,
+      p_note: note || null,
+    })
 
     if (error) {
       console.error('[addPastTrip] Error:', error)
-      if (error.code === '23505') {
+      if (error.code === '23505' || error.message?.includes('unique')) {
         return { data: null, error: 'Vous avez déjà déclaré un voyage dans ce pays' }
       }
       return { data: null, error: error.message }

@@ -5,6 +5,8 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import type { CustomerStatus } from '@/lib/supabase/database.types'
+import { sendEmail } from '@/lib/email/resend'
+import { generateEmailHtml } from '@/lib/email/templates'
 
 async function createClient() {
   const cookieStore = await cookies()
@@ -349,6 +351,7 @@ export async function setLeadParticipant(dossierId: string, participantId: strin
 
 export async function sendPortalInvitation(participantId: string, dossierId: string) {
   const supabase = await createClient()
+  const writeClient = createWriteClient()
 
   // Get participant email
   const { data: participant } = await supabase
@@ -361,12 +364,75 @@ export async function sendPortalInvitation(participantId: string, dossierId: str
     throw new Error('Participant has no email address')
   }
 
-  // TODO: Generate magic link and send email via Resend
-  // For now, just mark as having access
-  await supabase
+  // Find the dossier_participant row
+  const { data: dpRow } = await writeClient
+    .from('dossier_participants')
+    .select('id, invitation_token')
+    .eq('dossier_id', dossierId)
+    .eq('participant_id', participantId)
+    .single()
+
+  if (!dpRow) {
+    throw new Error('Participant not linked to this dossier')
+  }
+
+  // Generate invitation token if not already present
+  const invitationToken = dpRow.invitation_token || crypto.randomUUID()
+
+  // Update dossier_participant with token
+  await writeClient
+    .from('dossier_participants')
+    .update({
+      invitation_token: invitationToken,
+      invited_at: new Date().toISOString(),
+    })
+    .eq('id', dpRow.id)
+
+  // Mark participant as having portal access
+  await writeClient
     .from('participants')
-    .update({ has_portal_access: true })
+    .update({
+      has_portal_access: true,
+      portal_invited_at: new Date().toISOString(),
+    })
     .eq('id', participantId)
+
+  // Get dossier info for email context
+  const { data: dossier } = await supabase
+    .from('dossiers')
+    .select('title, destination_countries')
+    .eq('id', dossierId)
+    .single()
+
+  const dossierTitle = dossier?.title || 'Votre voyage'
+  const invitationUrl = `${process.env.NEXT_PUBLIC_APP_URL || ''}/invitation/${invitationToken}`
+  const participantName = `${participant.first_name} ${participant.last_name}`.trim()
+
+  // Send invitation email via Resend
+  const emailBody = `
+    <h2>Bonjour ${participant.first_name},</h2>
+    <p>Vous avez été invité(e) à rejoindre l'espace voyageur pour <strong>${dossierTitle}</strong>.</p>
+    <p>Cliquez sur le bouton ci-dessous pour créer votre compte et accéder à toutes les informations de votre voyage :</p>
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="${invitationUrl}"
+         style="display: inline-block; background-color: #0FB6BC; color: white; padding: 14px 28px; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 15px;">
+        Accéder à mon espace voyageur
+      </a>
+    </div>
+    <p style="color: #666; font-size: 13px;">Ou copiez ce lien dans votre navigateur : <a href="${invitationUrl}">${invitationUrl}</a></p>
+  `
+
+  try {
+    await sendEmail({
+      to: participant.email,
+      toName: participantName,
+      subject: `Invitation voyage — ${dossierTitle}`,
+      html: generateEmailHtml(emailBody),
+    })
+  } catch (emailError) {
+    console.error('Failed to send invitation email:', emailError)
+    // Don't throw — the token is saved, they can still use the link
+  }
 
   // Log event
   await supabase.from('events').insert({
@@ -375,7 +441,8 @@ export async function sendPortalInvitation(participantId: string, dossierId: str
     payload: {
       type: 'portal_invitation',
       recipient: participant.email,
-      participant_name: `${participant.first_name} ${participant.last_name}`
+      participant_name: participantName,
+      invitation_url: invitationUrl,
     }
   })
 

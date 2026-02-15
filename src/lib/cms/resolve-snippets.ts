@@ -2,10 +2,25 @@
  * Server-side CMS snippet resolution.
  * Queries cms_snippets directly from Supabase for use in Server Components.
  *
+ * Uses service_role client to bypass RLS — the voyageur (participant) is NOT
+ * in the `users` table, so the RLS policy can't resolve their tenant_id.
+ * This is safe because we only READ public CMS content, never write.
+ *
  * Resolution cascade: tenant-specific → global (tenant_id IS NULL) → fallback.
  */
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+
+function createServiceClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!serviceKey) {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set — cannot resolve CMS snippets')
+  }
+  return createSupabaseClient(supabaseUrl, serviceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
+}
 
 export interface ResolvedSnippet {
   id: string
@@ -21,20 +36,29 @@ export interface ResolvedSnippet {
 /**
  * Fetch all active snippets for a category with cascade resolution.
  * Returns resolved snippets sorted by sort_order.
+ *
+ * @param tenantId - If provided, fetches tenant-specific + global snippets.
+ *                   If omitted, fetches ALL snippets (service_role bypasses RLS).
  */
 export async function resolveSnippetsByCategory(
   category: string,
-  lang = 'fr'
+  lang = 'fr',
+  tenantId?: string | null
 ): Promise<ResolvedSnippet[]> {
-  const supabase = await createClient()
+  const supabase = createServiceClient()
 
-  // Fetch all snippets for this category (both global and tenant-specific)
-  const { data, error } = await (supabase
-    .from('cms_snippets') as any)
+  // Build query — filter by tenant + globals if tenantId is provided
+  let query = (supabase.from('cms_snippets') as any)
     .select('*')
     .eq('category', category)
     .eq('is_active', true)
-    .order('sort_order', { ascending: true }) as { data: any[] | null; error: any }
+    .order('sort_order', { ascending: true })
+
+  if (tenantId) {
+    query = query.or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+  }
+
+  const { data, error } = await query as { data: any[] | null; error: any }
 
   if (error || !data) {
     // Table cms_snippets may not exist yet — silently return empty
@@ -71,20 +95,29 @@ export async function resolveSnippetsByCategory(
 /**
  * Resolve specific snippet keys to their text values for a given language.
  * Returns a flat dict: { "key": "content in lang" }
+ *
+ * @param tenantId - If provided, fetches tenant-specific + global snippets.
+ *                   If omitted, fetches ALL snippets (service_role bypasses RLS).
  */
 export async function resolveSnippetValues(
   keys: string[],
-  lang = 'fr'
+  lang = 'fr',
+  tenantId?: string | null
 ): Promise<Record<string, string>> {
   if (keys.length === 0) return {}
 
-  const supabase = await createClient()
+  const supabase = createServiceClient()
 
-  const { data, error } = await (supabase
-    .from('cms_snippets') as any)
+  let query = (supabase.from('cms_snippets') as any)
     .select('*')
     .in('snippet_key', keys)
-    .eq('is_active', true) as { data: any[] | null; error: any }
+    .eq('is_active', true)
+
+  if (tenantId) {
+    query = query.or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+  }
+
+  const { data, error } = await query as { data: any[] | null; error: any }
 
   if (error || !data) {
     // Table cms_snippets may not exist yet — silently return empty
